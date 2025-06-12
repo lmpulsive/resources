@@ -1,0 +1,2020 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cozy Winter Scene (Night)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script> <!-- Tone.js library for audio -->
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0a0a20; /* Dark blue night sky */ }
+        canvas { display: block; }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: sans-serif;
+            font-size: 2em;
+            cursor: pointer;
+            z-index: 100;
+            text-align: center;
+            transition: opacity 1s ease-in-out;
+        }
+        #overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="overlay">
+        Click to Start the Adventure!
+    </div>
+    <script type="module">
+        // Global variables for scene, camera, renderer, etc.
+        let scene, camera, renderer;
+        let characterGroup; // Group for the current player character
+        // References to character parts for animation - these will be updated when character changes
+        let currentBody, currentHead, currentLeg1, currentLeg2, currentArm1, currentArm2; 
+        let windParticles; // For general falling snow
+        let kickUpParticles; // For snow kicked up by character movement
+        const clock = new THREE.Clock();
+
+        // Object to store key states for movement (WASD and Space for jump)
+        const keys = {
+            'w': false,
+            'a': false,
+            's': false,
+            'd': false,
+            ' ': false // Spacebar for jump
+        };
+
+        // Jump animation variables
+        let isJumping = false;
+        let jumpVelocity = 0;
+        const initialJumpSpeed = 15; // Initial upward velocity for jump - Adjusted to half
+        const gravity = -25; // Adjusted gravity for a snappier jump
+
+        // Camera control variables
+        let isDragging = false;
+        let previousMouseX = 0;
+        let cameraRotationAngle = 0; // Current angle of the camera around the character
+        const cameraDistance = 6;    // Closer distance for the camera
+        const cameraOffsetY = 5;     // Slightly higher fixed camera height above the character
+
+        // Spotlight variable
+        let playerSpotlight;
+        const spotlightHeight = 8; // Height above the player for the spotlight
+
+        // Gun variables
+        let pharaohGun;
+        let gunGlowParticles; // Particle system for the gun's glow effect
+        let gunGlowParticlePool = [];
+        const gunGlowParticleCount = 150; // Number of glow particles for the gun
+
+        // Particle system variables (General Snowfall)
+        const snowDrawDistance = 40; // Max distance from character particles will be rendered
+        const windDriftSpeed = 0.5; // Controls horizontal movement of snow
+
+        // Particle system variables (Snow Kick-up)
+        const kickUpCount = 100; // Number of small particles for kick-up effect
+        const kickUpMaxLifespan = 0.5; // Seconds until particle fades
+        const kickUpEmitRate = 10; // Particles emitted per second when moving
+        let kickUpParticlePool = []; // Pool to reuse particles
+        let kickUpGeometry;
+        let kickUpPositions;
+        let kickUpSizes; // For fading effect
+
+        // Sanctuary elements
+        let blueCrystalHeart, redCrystalHeart;
+        let blueFloatingOrbs = [];
+        let redFloatingOrbs = [];
+        let redShrineParticles, blueShrineParticles; // New: Particle systems for shrines
+        let redShrineParticlePool = [];
+        let blueShrineParticlePool = [];
+        const shrineParticleCount = 500; // Increased: More particles per shrine
+
+        // Respawn and Character Change Variables
+        let isInRedShrine = false;
+        let redShrineTimer = 0;
+        const redShrineRespawnDelay = 3; // seconds
+        const townCenter = new THREE.Vector3(0, 0, 0); // Respawn location
+
+        // --- Collision System Variables ---
+        // This array will store THREE.Mesh objects that are set up for collision detection
+        let collidableMeshes = []; 
+        const characterCollisionRadius = 0.5; // Radius of the bounding sphere for the character
+        // Offset from characterGroup.position (which is at the base) to the center of its collision sphere
+        const characterCollisionCenterOffset = new THREE.Vector3(0, 1.0, 0); 
+        const mapHalfSize = 100; // Half size of the 200x200 ground plane
+
+        // --- Audio Variables ---
+        // Moved to MusicPlayer class
+        let musicPlayer; // Instance of our new MusicPlayer class
+
+        // Initialize the scene
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a20); // Dark blue night sky
+
+            // Camera setup (PerspectiveCamera for 3D view)
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // Initial camera position will be updated by character follow logic in animate()
+            camera.position.set(0, cameraOffsetY, cameraDistance); // Initial position, will be overridden
+            camera.lookAt(0, 0, 0);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true }); // Enable antialiasing for smoother edges
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true; // Enable shadow maps
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer shadows
+
+            // --- Atmospheric Lighting (Physical Lighting Model) ---
+            renderer.toneMapping = THREE.ReinhardToneMapping; // Apply Reinhard Tone Mapping
+            renderer.toneMappingExposure = 1.0; // FURTHER ADJUSTED EXPOSURE for a darker, more intimate night feel
+
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting (Night scene, adjusted for brightness and PBR materials)
+            // Ambient light for general illumination - SIGNIFICANTLY REDUCED for deeper night
+            const ambientLight = new THREE.AmbientLight(0x606080, 0.1); // Lowered intensity
+            scene.add(ambientLight);
+
+            // Moonlight (Directional Light acts as the moon) - SLIGHTLY REDUCED to match overall tone
+            const directionalLight = new THREE.DirectionalLight(0xb0e0e6, 0.8); // Adjusted intensity
+            directionalLight.position.set(5, 15, 5); // Position of the 'moon'
+            directionalLight.castShadow = true;
+            // Configure shadow properties for the directional light
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 50;
+            directionalLight.shadow.camera.left = -20;
+            directionalLight.shadow.camera.right = 20;
+            directionalLight.shadow.camera.top = 20;
+            directionalLight.shadow.camera.bottom = -20;
+            scene.add(directionalLight);
+
+            // --- Player-following Spotlight (Subtle) ---
+            playerSpotlight = new THREE.SpotLight(0xffffe0, 15, 8, Math.PI / 3, 0.7, 2); // Warm white, reduced intensity, small distance, wider angle, soft penumbra, decay
+            playerSpotlight.castShadow = false; // Keep shadows off for subtlety and performance
+            scene.add(playerSpotlight);
+            scene.add(playerSpotlight.target); // Spotlight target must be added to the scene
+
+            // --- Materials (Now using MeshStandardMaterial for PBR) ---
+            const snowMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, metalness: 0.1 }); // Slightly reflective snow
+            const characterMaterial = new THREE.MeshStandardMaterial({ color: 0xff8c00, roughness: 0.7, metalness: 0.0 });
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9, metalness: 0.0 });
+            const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.6, metalness: 0.0 });
+            const ornamentMaterialRed = new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.3, metalness: 0.1 });
+            const ornamentMaterialBlue = new THREE.MeshStandardMaterial({ color: 0x0000ff, roughness: 0.3, metalness: 0.1 });
+            const ornamentMaterialYellow = new THREE.MeshStandardMaterial({ color: 0xffff00, roughness: 0.3, metalness: 0.1 });
+            const houseBaseMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.8, metalness: 0.0 });
+            const houseRoofMaterial = new THREE.MeshStandardMaterial({ color: 0xa0522d, roughness: 0.8, metalness: 0.0 });
+            const houseDoorMaterial = new THREE.MeshStandardMaterial({ color: 0x5a2d0d, roughness: 0.8, metalness: 0.0 });
+            const giftBoxMaterialGreen = new THREE.MeshStandardMaterial({ color: 0x00ff00, roughness: 0.3, metalness: 0.0 });
+            const giftBoxMaterialPink = new THREE.MeshStandardMaterial({ color: 0xff00ff, roughness: 0.3, metalness: 0.0 });
+            const giftBoxMaterialCyan = new THREE.MeshStandardMaterial({ color: 0x00ffff, roughness: 0.3, metalness: 0.0 });
+            const giftBoxMaterialOrange = new THREE.MeshStandardMaterial({ color: 0xffa500, roughness: 0.3, metalness: 0.0 });
+            const giftRibbonMaterialWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, metalness: 0.2 });
+            const giftRibbonMaterialYellow = new THREE.MeshStandardMaterial({ color: 0xffff00, roughness: 0.2, metalness: 0.2 });
+            const giftRibbonMaterialBlue = new THREE.MeshStandardMaterial({ color: 0x0000ff, roughness: 0.2, metalness: 0.2 });
+            const snowmanMaterial = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, roughness: 0.7, metalness: 0.0 });
+            const noseMaterial = new THREE.MeshStandardMaterial({ color: 0xffa500, roughness: 0.6, metalness: 0.0 });
+            const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.1, metalness: 0.0 });
+            const rockPatchMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9, metalness: 0.0 });
+            const dirtPatchMaterial = new THREE.MeshStandardMaterial({ color: 0x5C4033, roughness: 0.9, metalness: 0.0 });
+            const handStoneMaterial = new THREE.MeshStandardMaterial({ color: 0x706e6b, roughness: 0.9, metalness: 0.05 }); // Stone material for hands
+
+
+            // Ground (Snow)
+            const groundGeometry = new THREE.PlaneGeometry(mapHalfSize * 2, mapHalfSize * 2); // Increased ground size
+            const ground = new THREE.Mesh(groundGeometry, snowMaterial); // Using snowMaterial
+            ground.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+            ground.position.y = 0; // Ensure ground is at y=0
+            ground.receiveShadow = true; // Ground can receive shadows
+            scene.add(ground);
+
+            // Initial Player Character (Pharaoh-like)
+            characterGroup = createPharaohCharacter(); // Changed to Pharaoh character by default
+            characterGroup.position.set(0, 0, 0); // Initial position
+            scene.add(characterGroup);
+            updateCharacterAnimationRefs(); // Set initial animation references
+
+            // Create and attach the gun *after* character is initialized and refs are updated
+            pharaohGun = createPharaohGun();
+            if (currentArm2) { // Ensure currentArm2 is defined
+                // Default orientation: barrel pointing forward (+Z), right-side up.
+                pharaohGun.position.set(0.0, 0.0, 0.6); // Position in front of the arm pivot
+                pharaohGun.rotation.set(0, 0, 0); // No additional rotation needed if gun is built correctly
+                currentArm2.add(pharaohGun); // Attach to the right arm
+            } else {
+                console.warn("currentArm2 is undefined. Cannot attach gun.");
+            }
+
+
+            // --- Environmental Objects ---
+
+            // Function to create a standard tree
+            function createTree(x, z) {
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 2, 8), trunkMaterial);
+                trunk.position.set(x, 1, z);
+                trunk.castShadow = true;
+                trunk.receiveShadow = true;
+                scene.add(trunk);
+
+                const leaves = new THREE.Mesh(new THREE.ConeGeometry(1, 3, 8), leavesMaterial);
+                leaves.position.set(x, 3, z);
+                leaves.castShadow = true;
+                leaves.receiveShadow = true;
+                scene.add(leaves);
+
+                // Create an invisible collision sphere for the tree
+                const treeCollisionMesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(1.5, 8, 8), // Collision radius
+                    new THREE.MeshBasicMaterial({ visible: false }) // Invisible collision helper
+                );
+                treeCollisionMesh.position.set(x, 1.5, z); // Center collision sphere at approx. middle of the tree
+                scene.add(treeCollisionMesh); // Add to scene to ensure its world position is updated
+                
+                // Store collision data in userData
+                treeCollisionMesh.userData.isCollidable = true;
+                treeCollisionMesh.userData.collisionType = 'sphere';
+                treeCollisionMesh.userData.collisionRadius = 1.5; 
+                collidableMeshes.push(treeCollisionMesh); // Add the collision mesh to the array
+            }
+
+            // Function to create a decorated Christmas tree
+            function createDecoratedTree(x, z) {
+                const treeGroup = new THREE.Group();
+
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 2, 8), trunkMaterial);
+                trunk.position.set(x, 1, z);
+                trunk.castShadow = true;
+                trunk.receiveShadow = true;
+                treeGroup.add(trunk);
+
+                const leaves = new THREE.Mesh(new THREE.ConeGeometry(1, 3, 8), leavesMaterial);
+                leaves.position.set(x, 3, z);
+                leaves.castShadow = true;
+                leaves.receiveShadow = true;
+                treeGroup.add(leaves);
+
+                const ornamentGeometry = new THREE.SphereGeometry(0.15, 6, 6);
+
+                for (let i = 0; i < 8; i++) {
+                    const ornament = new THREE.Mesh(ornamentGeometry, [ornamentMaterialRed, ornamentMaterialBlue, ornamentMaterialYellow][Math.floor(Math.random() * 3)]);
+                    ornament.position.set(
+                        x + (Math.random() - 0.5) * 0.8,
+                        3 + (Math.random() - 0.5) * 2,
+                        z + (Math.random() - 0.5) * 0.8
+                    );
+                    ornament.castShadow = true;
+                    treeGroup.add(ornament);
+                }
+                scene.add(treeGroup);
+
+                // Add collision sphere for decorated tree (same as standard tree)
+                const decoratedTreeCollisionMesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(1.5, 8, 8),
+                    new THREE.MeshBasicMaterial({ visible: false })
+                );
+                decoratedTreeCollisionMesh.position.set(x, 1.5, z);
+                scene.add(decoratedTreeCollisionMesh);
+
+                decoratedTreeCollisionMesh.userData.isCollidable = true;
+                decoratedTreeCollisionMesh.userData.collisionType = 'sphere';
+                decoratedTreeCollisionMesh.userData.collisionRadius = 1.5;
+                collidableMeshes.push(decoratedTreeCollisionMesh);
+            }
+
+            // Function to create a low-poly house
+            function createHouse(x, z, rotationY = 0) {
+                const houseGroup = new THREE.Group();
+
+                const base = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 4), houseBaseMaterial);
+                base.position.set(x, 1.5, z);
+                base.castShadow = true;
+                base.receiveShadow = true;
+                houseGroup.add(base);
+
+                const roof = new THREE.Mesh(new THREE.ConeGeometry(3, 2, 4), houseRoofMaterial);
+                roof.rotation.y = Math.PI / 4;
+                roof.position.set(x, 3.5, z);
+                roof.castShadow = true;
+                roof.receiveShadow = true;
+                houseGroup.add(roof);
+
+                const door = new THREE.Mesh(new THREE.BoxGeometry(1, 1.8, 0.1), houseDoorMaterial);
+                door.position.set(x, 0.9, z + 2.01);
+                door.castShadow = true;
+                houseGroup.add(door);
+
+                houseGroup.rotation.y = rotationY;
+                scene.add(houseGroup);
+
+                // Add collision sphere for the house
+                const houseCollisionMesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(2.5, 8, 8), // Radius encapsulating the house base
+                    new THREE.MeshBasicMaterial({ visible: false })
+                );
+                houseCollisionMesh.position.set(x, 1.5, z); // Center around house base
+                scene.add(houseCollisionMesh);
+
+                houseCollisionMesh.userData.isCollidable = true;
+                houseCollisionMesh.userData.collisionType = 'sphere';
+                houseCollisionMesh.userData.collisionRadius = 2.5;
+                collidableMeshes.push(houseCollisionMesh);
+            }
+
+            // Function to create a gift box (Not typically collidable for simple games)
+            function createGift(x, z, size = 1, color, ribbonColor) {
+                const giftGroup = new THREE.Group();
+                const boxMaterial = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.0 });
+                const ribbonMaterial = new THREE.MeshStandardMaterial({ color: ribbonColor, roughness: 0.2, metalness: 0.2 });
+
+                const box = new THREE.Mesh(new THREE.BoxGeometry(size, size, size), boxMaterial);
+                box.position.set(x, size / 2, z);
+                box.castShadow = true;
+                giftGroup.add(box);
+
+                const ribbonV = new THREE.Mesh(new THREE.BoxGeometry(size + 0.05, size + 0.05, 0.1), ribbonMaterial);
+                ribbonV.position.set(x, size / 2, z);
+                ribbonV.rotation.y = Math.PI / 2;
+                ribbonV.castShadow = true;
+                giftGroup.add(ribbonV);
+
+                const ribbonH = new THREE.Mesh(new THREE.BoxGeometry(size + 0.05, size + 0.05, 0.1), ribbonMaterial);
+                ribbonH.position.set(x, size / 2, z);
+                ribbonH.castShadow = true;
+                giftGroup.add(ribbonH);
+
+                scene.add(giftGroup);
+            }
+
+            // Function to create a simple snowman
+            function createSnowman(x, z) {
+                const snowmanGroup = new THREE.Group();
+
+                const bottom = new THREE.Mesh(new THREE.SphereGeometry(1.2, 10, 10), snowmanMaterial);
+                bottom.position.set(x, 1.2, z);
+                bottom.castShadow = true;
+                snowmanGroup.add(bottom);
+
+                const middle = new THREE.Mesh(new THREE.SphereGeometry(0.8, 10, 10), snowmanMaterial);
+                middle.position.set(x, 2.8, z);
+                middle.castShadow = true;
+                snowmanGroup.add(middle);
+
+                const headSnowman = new THREE.Mesh(new THREE.SphereGeometry(0.6, 10, 10), snowmanMaterial);
+                headSnowman.position.set(x, 4.0, z);
+                headSnowman.castShadow = true;
+                snowmanGroup.add(headSnowman);
+
+                const nose = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.5, 8), noseMaterial);
+                nose.rotation.x = Math.PI / 2;
+                nose.position.set(x, 4.0, z + 0.6);
+                nose.castShadow = true;
+                snowmanGroup.add(nose);
+
+                const eyeGeometry = new THREE.SphereGeometry(0.08, 6, 6);
+                const eye1 = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                eye1.position.set(x - 0.25, 4.1, z + 0.55);
+                eye1.castShadow = true;
+                snowmanGroup.add(eye1);
+
+                const eye2 = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                eye2.position.set(x + 0.25, 4.1, z + 0.55);
+                eye2.castShadow = true;
+                snowmanGroup.add(eye2);
+
+                scene.add(snowmanGroup);
+
+                // Add collision sphere for snowman
+                const snowmanCollisionMesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(1.5, 8, 8),
+                    new THREE.MeshBasicMaterial({ visible: false })
+                );
+                snowmanCollisionMesh.position.set(x, 2.0, z); // Center around middle of snowman
+                scene.add(snowmanCollisionMesh);
+
+                snowmanCollisionMesh.userData.isCollidable = true;
+                snowmanCollisionMesh.userData.collisionType = 'sphere';
+                snowmanCollisionMesh.userData.collisionRadius = 1.5;
+                collidableMeshes.push(snowmanCollisionMesh);
+            }
+
+            // Function to create low-poly mountains
+            function createMountain(x, z, scale = 1) {
+                const mountainRadius = 10 * scale;
+                const mountainHeight = 15 * scale;
+                const mountainGeometry = new THREE.ConeGeometry(mountainRadius, mountainHeight, 8);
+                const mountainMesh = new THREE.Mesh(mountainGeometry, snowMaterial); // Mountains are snow-capped
+                mountainMesh.position.set(x, mountainHeight / 2, z); // Position center of the cone's height at mountainHeight/2
+                mountainMesh.castShadow = true;
+                mountainMesh.receiveShadow = true;
+                scene.add(mountainMesh);
+
+                // Store collision data directly on the mountain mesh
+                mountainMesh.userData.isCollidable = true;
+                mountainMesh.userData.collisionType = 'cone'; // Custom type for cone collision logic
+                mountainMesh.userData.radius = mountainRadius;
+                mountainMesh.userData.height = mountainHeight;
+                mountainMesh.userData.baseY = mountainMesh.position.y - mountainHeight / 2; // Calculate actual base Y
+                collidableMeshes.push(mountainMesh); // Add the actual mountain mesh
+            }
+
+            // Function to create varied terrain patches (e.g., exposed rock/dirt)
+            function createTerrainPatch(x, z, type = 'rock', sizeX = 5, sizeZ = 5, height = 0.1) {
+                let patchMaterial;
+                if (type === 'rock') {
+                    patchMaterial = rockPatchMaterial;
+                } else { // Default to dirt/darker ground
+                    patchMaterial = dirtPatchMaterial;
+                }
+
+                const patch = new THREE.Mesh(new THREE.BoxGeometry(sizeX, height, sizeZ), patchMaterial);
+                patch.position.set(x, height / 2, z);
+                patch.castShadow = true;
+                patch.receiveShadow = true;
+                scene.add(patch);
+            }
+
+            // --- Sanctuary Creation Functions ---
+
+            // Helper to create a single giant hand
+            function createGiantHand(scale = 1) {
+                const handGroup = new THREE.Group();
+
+                // Palm (main body of the hand)
+                const palm = new THREE.Mesh(new THREE.BoxGeometry(3 * scale, 1 * scale, 4 * scale), handStoneMaterial);
+                palm.position.y = 0.5 * scale;
+                palm.castShadow = true;
+                palm.receiveShadow = true;
+                handGroup.add(palm);
+
+                // Fingers (simplified as stretched boxes)
+                const fingerGeometry = new THREE.BoxGeometry(0.8 * scale, 0.8 * scale, 1.5 * scale);
+
+                // Thumb
+                const thumb = new THREE.Mesh(fingerGeometry, handStoneMaterial);
+                thumb.position.set(-1.5 * scale, 0.8 * scale, -1.5 * scale);
+                thumb.rotation.z = Math.PI / 4; // Angle it out
+                thumb.castShadow = true;
+                thumb.receiveShadow = true;
+                handGroup.add(thumb);
+
+                // Index finger
+                const index = new THREE.Mesh(fingerGeometry, handStoneMaterial);
+                index.position.set(0 * scale, 1.2 * scale, 2 * scale);
+                index.castShadow = true;
+                index.receiveShadow = true;
+                handGroup.add(index);
+
+                // Middle finger
+                const middle = new THREE.Mesh(fingerGeometry, handStoneMaterial);
+                middle.position.set(1 * scale, 1.2 * scale, 2 * scale);
+                middle.castShadow = true;
+                middle.receiveShadow = true;
+                handGroup.add(middle);
+
+                // Ring finger
+                const ring = new THREE.Mesh(fingerGeometry, handStoneMaterial);
+                ring.position.set(-1 * scale, 1.2 * scale, 2 * scale);
+                ring.castShadow = true;
+                ring.receiveShadow = true;
+                handGroup.add(ring);
+
+                return handGroup;
+            }
+
+            // Function to create a full sanctuary (goblet, hands, orbs)
+            function createSanctuary(x, z, color) {
+                const sanctuaryGroup = new THREE.Group();
+                sanctuaryGroup.position.set(x, 0, z); // Base position
+
+                // Crystal Heart
+                const crystalMaterial = new THREE.MeshStandardMaterial({
+                    color: color,
+                    transparent: true,
+                    opacity: 0.6,
+                    emissive: color,
+                    emissiveIntensity: 20 // Significantly Increased glow
+                });
+                const crystalHeart = new THREE.Mesh(new THREE.OctahedronGeometry(1.5, 0), crystalMaterial);
+                crystalHeart.position.y = 4; // Position above hands
+                crystalHeart.castShadow = true;
+                sanctuaryGroup.add(crystalHeart);
+
+                // Store reference for animation
+                if (color === 0x00ccff) blueCrystalHeart = crystalHeart;
+                else redCrystalHeart = crystalHeart;
+
+                // Light from Crystal Heart - Increased intensity and range
+                const crystalLight = new THREE.PointLight(color, 400, 30); // Higher intensity, larger range
+                crystalLight.position.copy(crystalHeart.position);
+                crystalLight.castShadow = false; // Point lights don't cast shadows for performance here
+                sanctuaryGroup.add(crystalLight);
+
+                // Giant Hands
+                const leftHand = createGiantHand(2); // Scale them up
+                leftHand.position.set(-3, 0, -1);
+                leftHand.rotation.y = -Math.PI / 8;
+                leftHand.rotation.x = Math.PI / 16;
+                sanctuaryGroup.add(leftHand);
+
+                const rightHand = createGiantHand(2);
+                rightHand.position.set(3, 0, -1);
+                rightHand.rotation.y = Math.PI / 8;
+                rightHand.rotation.x = Math.PI / 16;
+                sanctuaryGroup.add(rightHand);
+
+                // Base Rocks (for hands)
+                const baseRockMaterial = new THREE.MeshStandardMaterial({ color: 0x404040, roughness: 0.9 });
+                for(let i = 0; i < 15; i++) {
+                    const rock = new THREE.Mesh(new THREE.BoxGeometry(1 + Math.random()*2, 0.5 + Math.random()*1, 1 + Math.random()*2), baseRockMaterial);
+                    rock.position.set((Math.random() - 0.5) * 8, 0, (Math.random() - 0.5) * 8);
+                    rock.rotation.y = Math.random() * Math.PI;
+                    rock.castShadow = true;
+                    rock.receiveShadow = true;
+                    sanctuaryGroup.add(rock);
+                }
+
+                // Floating Orbs
+                const orbCount = 4;
+                const orbRadius = 6;
+                const orbHeight = 4;
+                const orbMaterial = new THREE.MeshStandardMaterial({
+                    color: color,
+                    emissive: color,
+                    emissiveIntensity: 10 // Stronger glow for orbs
+                });
+                const orbGeometry = new THREE.SphereGeometry(0.5, 8, 8); // Low-poly orbs
+
+                const currentOrbs = [];
+                for (let i = 0; i < orbCount; i++) {
+                    const orb = new THREE.Mesh(orbGeometry, orbMaterial);
+                    orb.position.set(
+                        Math.cos(i * Math.PI * 2 / orbCount) * orbRadius,
+                        orbHeight,
+                        Math.sin(i * Math.PI * 2 / orbCount) * orbRadius
+                    );
+                    orb.castShadow = false; // Orbs don't cast shadows
+                    sanctuaryGroup.add(orb);
+
+                    // Light for each orb
+                    const orbLight = new THREE.PointLight(color, 80, 10); // Smaller, less intense light
+                    orbLight.position.copy(orb.position);
+                    orbLight.castShadow = false;
+                    sanctuaryGroup.add(orbLight); // Add light to the sanctuary group as well
+
+                    currentOrbs.push({ orb: orb, light: orbLight, initialAngle: i * Math.PI * 2 / orbCount });
+                }
+
+                scene.add(sanctuaryGroup);
+
+                // Add collision sphere for the sanctuary's central crystal area
+                const crystalCollisionMesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(2.0, 8, 8), // Radius for collision
+                    new THREE.MeshBasicMaterial({ visible: false })
+                );
+                // Position in world space, relative to the sanctuaryGroup's and crystalHeart's positions
+                crystalCollisionMesh.position.copy(sanctuaryGroup.position).add(crystalHeart.position);
+                scene.add(crystalCollisionMesh);
+
+                crystalCollisionMesh.userData.isCollidable = true;
+                crystalCollisionMesh.userData.collisionType = 'sphere';
+                crystalCollisionMesh.userData.collisionRadius = 2.0;
+                collidableMeshes.push(crystalCollisionMesh);
+
+                return { crystalHeart, floatingOrbs: currentOrbs, group: sanctuaryGroup }; // Return group for position reference
+            }
+
+
+            // --- Place various environmental objects ---
+            // Existing Trees
+            createTree(10, 5);
+            createTree(-8, -12);
+            createTree(15, -7);
+            createTree(-5, 10);
+            createTree(20, 15);
+            createTree(-15, -5);
+            createTree(35, 25);
+            createTree(-35, -25);
+
+            // New: Decorated Christmas Trees
+            createDecoratedTree(-12, 8);
+            createDecoratedTree(8, -18);
+            createDecoratedTree(-20, -10);
+            createDecoratedTree(28, -20);
+            createDecoratedTree(-18, 30);
+
+            // New: Houses/Cabins - Now without internal lights
+            createHouse(25, 0, Math.PI / 4);
+            createHouse(-20, 20, -Math.PI / 8);
+            createHouse(0, -25, Math.PI / 2);
+            createHouse(-30, -5, Math.PI / 6);
+            createHouse(10, 30, Math.PI / 3);
+            createHouse(-15, -35, -Math.PI / 5);
+
+            // New: Gifts
+            createGift(18, -6, 0.8, 0x00ff00, 0xff0000); // Green gift with red ribbon
+            createGift(17, -5, 1.0, 0xff00ff, 0xffff00); // Pink gift with yellow ribbon
+            createGift(-10, 12, 0.7, 0x00ffff, 0xff00ff); // Cyan gift with pink ribbon
+            createGift(26, -18, 0.9, 0xffa500, 0x0000ff); // Orange gift with blue ribbon
+
+            // New: Snowmen
+            createSnowman(12, -10);
+            createSnowman(-2, 18);
+            createSnowman(30, 8);
+            createSnowman(-25, -20);
+
+            // New: Mountains in the background
+            createMountain(50, -50, 2);
+            createMountain(-60, -40, 1.5);
+            createMountain(-40, 60, 2.5);
+            createMountain(70, 70, 1.8);
+            createMountain(-70, 0, 2.2);
+            createMountain(0, -70, 1.7);
+
+            // New: Terrain variations (rocky/dirt patches)
+            createTerrainPatch(5, -15, 'rock', 8, 8, 0.2);
+            createTerrainPatch(-10, 25, 'dirt', 6, 6, 0.15);
+            createTerrainPatch(20, 30, 'rock', 10, 7, 0.3);
+            createTerrainPatch(-30, -10, 'dirt', 7, 9, 0.1);
+            createTerrainPatch(0, 0, 'rock', 4, 4, 0.1); // Small patch near start
+
+            // --- New: Magical Sanctuaries (RELOCATED to be next to each other) ---
+            // Store the sanctuary groups for collision detection
+            const blueSanctuary = createSanctuary(10, 0, 0x00ccff); // Blue sanctuary, now closer to the center
+            const redSanctuary = createSanctuary(-10, 0, 0xff0000); // Red sanctuary, now closer to the center
+            blueCrystalHeart = blueSanctuary.crystalHeart;
+            redCrystalHeart = redSanctuary.crystalHeart;
+            blueFloatingOrbs = blueSanctuary.floatingOrbs;
+            redFloatingOrbs = redSanctuary.floatingOrbs;
+
+            // --- Shrine Particles Initialization (Red Shrine) ---
+            const redParticleGeometry = new THREE.BufferGeometry();
+            const redParticlePositions = new Float32Array(shrineParticleCount * 3);
+            const redParticleSizes = new Float32Array(shrineParticleCount);
+            for (let i = 0; i < shrineParticleCount; i++) {
+                redParticlePositions[i * 3] = 0;
+                redParticlePositions[i * 3 + 1] = 0;
+                redParticlePositions[i * 3 + 2] = 0;
+                redParticleSizes[i] = 0; // Start invisible
+                redShrineParticlePool.push({
+                    x: 0, y: 0, z: 0,
+                    vx: 0, vy: 0, vz: 0,
+                    lifespan: 0, // Current lifespan
+                    maxLifespan: 0.8 + Math.random() * 0.7, // Shorter lifespan, more frequent spawn
+                    size: 0.4 + Math.random() * 0.4 // Larger initial size
+                });
+            }
+            redParticleGeometry.setAttribute('position', new THREE.BufferAttribute(redParticlePositions, 3));
+            redParticleGeometry.setAttribute('size', new THREE.BufferAttribute(redParticleSizes, 1));
+            const redParticleMaterial = new THREE.PointsMaterial({
+                color: 0xff4500, // Orange-red for flame/energy
+                size: 0.5,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending,
+                sizeAttenuation: true
+            });
+            redShrineParticles = new THREE.Points(redParticleGeometry, redParticleMaterial);
+            scene.add(redShrineParticles);
+
+
+            // --- Shrine Particles Initialization (Blue Shrine) ---
+            const blueParticleGeometry = new THREE.BufferGeometry();
+            const blueParticlePositions = new Float32Array(shrineParticleCount * 3);
+            const blueParticleSizes = new Float32Array(shrineParticleCount);
+            for (let i = 0; i < shrineParticleCount; i++) {
+                blueParticlePositions[i * 3] = 0;
+                blueParticlePositions[i * 3 + 1] = 0;
+                blueParticlePositions[i * 3 + 2] = 0;
+                blueParticleSizes[i] = 0; // Start invisible
+                blueShrineParticlePool.push({
+                    x: 0, y: 0, z: 0,
+                    vx: 0, vy: 0, vz: 0,
+                    lifespan: 0, // Current lifespan
+                    maxLifespan: 0.8 + Math.random() * 0.7, // Shorter lifespan, more frequent spawn
+                    size: 0.4 + Math.random() * 0.4 // Larger initial size
+                });
+            }
+            blueParticleGeometry.setAttribute('position', new THREE.BufferAttribute(blueParticlePositions, 3));
+            blueParticleGeometry.setAttribute('size', new THREE.BufferAttribute(blueParticleSizes, 1));
+            const blueParticleMaterial = new THREE.PointsMaterial({
+                color: 0x87ceeb, // Sky blue for energy
+                size: 0.5,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending,
+                sizeAttenuation: true
+            });
+            blueShrineParticles = new THREE.Points(blueParticleGeometry, blueParticleMaterial);
+            scene.add(blueShrineParticles);
+
+
+            // Wind Particles (Snow particles)
+            const particleCount = 4000;
+            const particles = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+            const pColor = new THREE.Color(0xffffff);
+
+            for (let i = 0; i < particleCount; i++) {
+                positions.push(Math.random() * 300 - 150); // x (-150 to 150)
+                positions.push(Math.random() * 60 + 20);  // y (start higher up: 20 to 80)
+                positions.push(Math.random() * 300 - 150); // z (-150 to 150)
+                colors.push(pColor.r, pColor.g, pColor.b);
+            }
+
+            particles.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            particles.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+            const particleMaterial = new THREE.PointsMaterial({
+                size: 0.3,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending
+            });
+
+            windParticles = new THREE.Points(particles, particleMaterial);
+            scene.add(windParticles);
+
+            // --- Snow Kick-up Particles Initialization ---
+            kickUpGeometry = new THREE.BufferGeometry();
+            kickUpPositions = new Float32Array(kickUpCount * 3);
+            kickUpSizes = new Float32Array(kickUpCount); // For fading effect
+            kickUpParticlePool = []; // Pool to reuse particles
+
+            for (let i = 0; i < kickUpCount; i++) {
+                kickUpPositions[i * 3] = 0;
+                kickUpPositions[i * 3 + 1] = -1000; // Off-screen initially
+                kickUpPositions[i * 3 + 2] = 0;
+                kickUpSizes[i] = 0; // Start invisible
+                kickUpParticlePool.push({
+                    x: 0, y: -1000, z: 0, // Position
+                    vx: 0, vy: 0, vz: 0, // Velocity
+                    lifespan: 0 // Current lifespan
+                });
+            }
+
+            kickUpGeometry.setAttribute('position', new THREE.BufferAttribute(kickUpPositions, 3));
+            kickUpGeometry.setAttribute('size', new THREE.BufferAttribute(kickUpSizes, 1)); // Custom attribute for size
+
+            const kickUpMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 0.2, // Small particles
+                transparent: true,
+                opacity: 0.7,
+                blending: THREE.AdditiveBlending,
+                sizeAttenuation: true // Particles closer to camera appear larger
+            });
+            // To make size attribute work, a custom shader would be needed,
+            // for simplicity, we'll manually scale opacity based on lifespan here for quick fade.
+            // For true size attenuation, use ShaderMaterial or a custom PointsMaterial shader.
+
+            kickUpParticles = new THREE.Points(kickUpGeometry, kickUpMaterial);
+            scene.add(kickUpParticles);
+
+            // --- Gun Glow Particles Initialization ---
+            const gunGlowParticleGeometry = new THREE.BufferGeometry();
+            const gunGlowPositions = new Float32Array(gunGlowParticleCount * 3);
+            const gunGlowSizes = new Float32Array(gunGlowParticleCount);
+            for (let i = 0; i < gunGlowParticleCount; i++) {
+                gunGlowPositions[i * 3] = 0;
+                gunGlowPositions[i * 3 + 1] = 0;
+                gunGlowPositions[i * 3 + 2] = 0;
+                gunGlowSizes[i] = 0; // Start invisible
+                gunGlowParticlePool.push({
+                    x: 0, y: 0, z: 0,
+                    vx: 0, vy: 0, vz: 0,
+                    lifespan: 0,
+                    maxLifespan: 1.0 + Math.random() * 1.0, // Longer lifespan for gentle float
+                    size: 0.15 + Math.random() * 0.1 // Small size
+                });
+            }
+            gunGlowParticleGeometry.setAttribute('position', new THREE.BufferAttribute(gunGlowPositions, 3));
+            gunGlowParticleGeometry.setAttribute('size', new THREE.BufferAttribute(gunGlowSizes, 1));
+            const gunGlowMaterial = new THREE.PointsMaterial({
+                color: 0x8affff, // Cyan glow color
+                size: 0.2,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending, // Essential for glow
+                sizeAttenuation: true
+            });
+            gunGlowParticles = new THREE.Points(gunGlowParticleGeometry, gunGlowMaterial);
+            // Will be added to the gun group, not directly to the scene
+
+            // Event Listeners for keyboard input (WASD)
+            window.addEventListener('keydown', (event) => {
+                const key = event.key.toLowerCase();
+                if (key in keys) {
+                    keys[key] = true;
+                }
+            });
+
+            window.addEventListener('keyup', (event) => {
+                const key = event.key.toLowerCase();
+                if (key in keys) {
+                    keys[key] = false;
+                }
+            });
+
+            // Mouse events for camera control
+            renderer.domElement.addEventListener('mousedown', (event) => {
+                isDragging = true;
+                previousMouseX = event.clientX;
+            });
+
+            renderer.domElement.addEventListener('mousemove', (event) => {
+                if (!isDragging) return;
+                const deltaX = event.clientX - previousMouseX;
+                cameraRotationAngle += deltaX * 0.005; // Adjust rotation speed
+                previousMouseX = event.clientX;
+            });
+
+            renderer.domElement.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            renderer.domElement.addEventListener('mouseleave', () => { // Stop dragging if mouse leaves canvas
+                isDragging = false;
+            });
+
+            // Handle window resizing
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        // Function to handle window resizing
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Custom lerpAngles function to replace THREE.MathUtils.lerpAngles
+        // Ensures the shortest path is taken when interpolating angles, handling wrapping correctly.
+        function lerpAngles(a, b, alpha) {
+            let angle = b - a;
+            // Normalize angle to be within [-PI, PI]
+            if (angle > Math.PI) angle -= 2 * Math.PI;
+            if (angle < -Math.PI) angle += 2 * Math.PI;
+            return a + angle * alpha;
+        }
+
+        /**
+         * Updates the global animation references (currentBody, currentHead, etc.)
+         * based on the structure of the currently active characterGroup.
+         * This makes the animation logic robust to character changes.
+         */
+        function updateCharacterAnimationRefs() {
+            // Reset existing references
+            currentBody = null;
+            currentHead = null;
+            currentLeg1 = null;
+            currentLeg2 = null;
+            currentArm1 = null;
+            currentArm2 = null;
+
+            if (!characterGroup) return;
+
+            // Attempt to find parts for Pokemon-like character (no longer primary, but kept for logic robustness)
+            const pokemonBodyCandidate = characterGroup.children.find(child => child.geometry instanceof THREE.SphereGeometry && child.position.y === 1);
+            if (pokemonBodyCandidate) {
+                currentBody = pokemonBodyCandidate;
+                currentHead = characterGroup.children.find(child => child.geometry instanceof THREE.SphereGeometry && child.position.y === 2.2);
+                currentLeg1 = characterGroup.children.find(child => child.geometry instanceof THREE.BoxGeometry && child.geometry.parameters.height === 0.8 && child.position.x < 0);
+                currentLeg2 = characterGroup.children.find(child => child.geometry instanceof THREE.BoxGeometry && child.geometry.parameters.height === 0.8 && child.position.x > 0);
+                currentArm1 = characterGroup.children.find(child => child.geometry instanceof THREE.BoxGeometry && child.geometry.parameters.height === 1 && child.position.x < 0);
+                currentArm2 = characterGroup.find(child => child.geometry instanceof THREE.BoxGeometry && child.geometry.parameters.height === 1 && child.position.x > 0);
+                return; // Found Pokemon character, exit
+            }
+
+            // If not Pokemon character, try to find parts for Pharaoh character
+            const pharaohBodyCandidate = characterGroup.children.find(child => child.userData.isPharaohBody);
+            if (pharaohBodyCandidate) {
+                currentBody = pharaohBodyCandidate;
+                currentHead = characterGroup.children.find(child => child.userData.isPharaohHead);
+                
+                // Pharaoh's arms and legs are children of the body
+                currentArm1 = currentBody.children.find(child => child.userData.isPharaohArm && child.position.x < 0);
+                currentArm2 = currentBody.children.find(child => child.userData.isPharaohArm && child.position.x > 0);
+                currentLeg1 = currentBody.children.find(child => child.userData.isPharaohLeg && child.position.x < 0);
+                currentLeg2 = currentBody.children.find(child => child.userData.isPharaohLeg && child.position.x > 0);
+            }
+        }
+
+
+        /**
+         * Creates the initial Pokemon-like character model.
+         * @returns {THREE.Group} A group containing all character parts.
+         */
+        function createPokemonLikeCharacter() {
+            const charGroup = new THREE.Group();
+            const characterMaterial = new THREE.MeshStandardMaterial({ color: 0xff8c00, roughness: 0.7, metalness: true, flatShading: true });
+
+            // Body
+            const bodyMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 8), characterMaterial);
+            bodyMesh.position.y = 1;
+            bodyMesh.castShadow = true;
+            charGroup.add(bodyMesh);
+
+            // Head
+            const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.7, 8, 8), characterMaterial);
+            headMesh.position.y = 2.2;
+            headMesh.castShadow = true;
+            charGroup.add(headMesh);
+
+            // Ears
+            const earGeometry = new THREE.SphereGeometry(0.2, 4, 4);
+            const ear1 = new THREE.Mesh(earGeometry, characterMaterial);
+            ear1.position.set(-0.6, 2.7, 0);
+            ear1.castShadow = true;
+            charGroup.add(ear1);
+
+            const ear2 = new THREE.Mesh(earGeometry, characterMaterial);
+            ear2.position.set(0.6, 2.7, 0);
+            ear2.castShadow = true;
+            charGroup.add(ear2);
+
+            // Arms
+            const armGeometry = new THREE.BoxGeometry(0.3, 1, 0.3);
+            const armMesh1 = new THREE.Mesh(armGeometry, characterMaterial);
+            armMesh1.position.set(-1.1, 0, 0); // Relative to charGroup center
+            armMesh1.castShadow = true;
+            charGroup.add(armMesh1);
+
+            const armMesh2 = new THREE.Mesh(armGeometry, characterMaterial);
+            armMesh2.position.set(1.1, 0, 0); // Relative to charGroup center
+            armMesh2.castShadow = true;
+            charGroup.add(armMesh2);
+
+            // Legs
+            const legGeometry = new THREE.BoxGeometry(0.4, 0.8, 0.4);
+            const legMesh1 = new THREE.Mesh(legGeometry, characterMaterial);
+            legMesh1.position.set(-0.6, -0.4, 0); // Relative to charGroup center
+            legMesh1.castShadow = true;
+            charGroup.add(legMesh1);
+
+            const legMesh2 = new THREE.Mesh(legGeometry, characterMaterial);
+            legMesh2.position.set(0.6, -0.4, 0); // Relative to charGroup center
+            legMesh2.castShadow = true;
+            charGroup.add(legMesh2);
+
+            return charGroup;
+        }
+
+        /**
+         * Creates a sophisticated gun asset with glossy metal textures,
+         * a Yugioh pyramid charm, and glowing particle effects.
+         * @returns {THREE.Group} A group containing the gun and its particle system.
+         */
+        function createPharaohGun() {
+            const gunGroup = new THREE.Group();
+
+            // Materials for the gun
+            // Using MeshPhysicalMaterial for more advanced metallic reflections and clearcoat effect
+            const mainGunMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0x303030, // Dark grey for a sleek look
+                metalness: 0.9,
+                roughness: 0.1, // Very glossy
+                clearcoat: 1.0, // Adds a reflective layer
+                clearcoatRoughness: 0.1,
+                flatShading: true // Maintain low-poly aesthetic
+            });
+
+            const accentMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0x00aaff, // Bright blue accents
+                metalness: 0.8,
+                roughness: 0.2,
+                clearcoat: 0.8,
+                clearcoatRoughness: 0.2,
+                flatShading: true
+            });
+
+            const barrelMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0x404040, // Slightly lighter barrel
+                metalness: 0.95,
+                roughness: 0.05,
+                clearcoat: 1.0,
+                clearcoatRoughness: 0.05,
+                flatShading: true
+            });
+
+            const gripMaterial = new THREE.MeshStandardMaterial({
+                color: 0x1a1a1a, // Darker, less reflective for grip
+                roughness: 0.8,
+                metalness: 0.1,
+                flatShading: true
+            });
+
+            // --- Main Body (Receiver) ---
+            const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 1.5), mainGunMaterial);
+            receiver.position.set(0, 0, 0); // Centered
+            gunGroup.add(receiver);
+
+            // --- Barrel ---
+            // Cylinder geometry defaults to aligning along Y-axis. To align along Z-axis (forward), rotate it on X by PI/2.
+            const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.8, 8), barrelMaterial);
+            barrel.position.set(0, 0, 0.75 + 0.4); // Extends from receiver along +Z
+            barrel.rotation.x = Math.PI / 2; // Correctly aligns it along the Z-axis of the gunGroup
+            gunGroup.add(barrel);
+
+            // --- Muzzle Brake (Angular Tip) ---
+            // Cone geometry defaults to aligning along Y-axis. To align along Z-axis, rotate it on X by PI/2.
+            const muzzleGeometry = new THREE.ConeGeometry(0.12, 0.15, 4); // Square cone
+            const muzzle = new THREE.Mesh(muzzleGeometry, barrelMaterial);
+            muzzle.position.set(0, 0, barrel.position.z + 0.4);
+            muzzle.rotation.x = Math.PI / 2; // Correctly aligns along Z
+            gunGroup.add(muzzle);
+
+            // --- Handle/Grip ---
+            const handle = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.7, 0.3), gripMaterial);
+            handle.position.set(0, -0.4, -0.4);
+            handle.rotation.x = Math.PI / 10; // Slight angle for ergonomic feel
+            gunGroup.add(handle);
+
+            // --- Magazine ---
+            const magazine = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.4, 0.2), mainGunMaterial);
+            magazine.position.set(0, -0.3, -0.2);
+            gunGroup.add(magazine);
+
+            // --- Top Sight/Scope ---
+            const scopeBase = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.1, 0.5), accentMaterial);
+            scopeBase.position.set(0, 0.25, 0.3);
+            gunGroup.add(scopeBase);
+
+            // Cylinder geometry for scope lens defaults to aligning along Y-axis. To align along Z-axis, rotate it on X by PI/2.
+            const scopeLens = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.1, 8), barrelMaterial);
+            scopeLens.position.set(0, 0.25, 0.55);
+            scopeLens.rotation.x = Math.PI / 2; // Correctly aligns along Z
+            gunGroup.add(scopeLens);
+
+            // --- Foregrip (Angular) ---
+            const foregripGeometry = new THREE.BufferGeometry();
+            const foregripVertices = new Float32Array([
+                // Front face (wider at top)
+                -0.15, 0.1, 0.5,
+                 0.15, 0.1, 0.5,
+                 0.1, -0.2, 0.5,
+                -0.1, -0.2, 0.5,
+
+                // Back face (narrower)
+                -0.1, 0.05, 0.2,
+                 0.1, 0.05, 0.2,
+                 0.08, -0.15, 0.2,
+                -0.08, -0.15, 0.2,
+            ]);
+            const foregripIndices = new Uint16Array([
+                // Front face
+                0, 1, 2,
+                0, 2, 3,
+                // Back face
+                4, 5, 6,
+                4, 6, 7,
+                // Sides
+                0, 4, 7,
+                0, 7, 3,
+                1, 5, 6,
+                1, 6, 2,
+                0, 1, 5,
+                0, 5, 4,
+                3, 2, 6,
+                3, 6, 7
+            ]);
+            foregripGeometry.setAttribute('position', new THREE.BufferAttribute(foregripVertices, 3));
+            foregripGeometry.setIndex(new THREE.BufferAttribute(foregripIndices, 1));
+            foregripGeometry.computeVertexNormals(); // For proper lighting
+            const foregrip = new THREE.Mesh(foregripGeometry, accentMaterial);
+            foregrip.position.set(0, -0.1, 0.2);
+            gunGroup.add(foregrip);
+
+
+            // --- Yugioh Pyramid Charm ---
+            const pyramidMaterial = new THREE.MeshStandardMaterial({
+                color: 0xFFD700, // Gold color
+                emissive: 0xFFD700,
+                emissiveIntensity: 5, // Bright glow
+                metalness: 0.9,
+                roughness: 0.1,
+                flatShading: true
+            });
+            const pyramidGeometry = new THREE.ConeGeometry(0.15, 0.15, 4); // Small tetrahedron-like pyramid
+            const pyramidCharm = new THREE.Mesh(pyramidGeometry, pyramidMaterial);
+            pyramidCharm.position.set(0.1, -0.3, 0.4); // Position hanging from the side of the gun
+            pyramidCharm.rotation.x = Math.PI / 2; // Point downwards, as a charm
+            gunGroup.add(pyramidCharm);
+
+            // Add the gun glow particles as a child of the gun group
+            gunGroup.add(gunGlowParticles);
+
+            return gunGroup;
+        }
+
+
+        /**
+         * Creates the Pharaoh Atem character model based on user's specifications.
+         * @returns {THREE.Group} A group containing all Pharaoh character parts.
+         */
+        function createPharaohCharacter() {
+            const pharaoh = new THREE.Group();
+
+            // Materials with flatShading
+            const skinMaterial = new THREE.MeshStandardMaterial({ color: 0xf3c888, flatShading: true });
+            const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xf4eadb, flatShading: true });
+            const goldMaterial = new THREE.MeshStandardMaterial({ color: 0xFFD700, flatShading: true, roughness: 0.3, metalness: 0.5 }); // Gold color
+            const darkGoldMaterial = new THREE.MeshStandardMaterial({ color: 0xC49F00, flatShading: true, roughness: 0.4, metalness: 0.6 }); // Darker gold for contrast
+            const capeMaterial = new THREE.MeshStandardMaterial({ color: 0x7c47bc, flatShading: true }); // Purple
+            const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x1c1b18, flatShading: true }); // Dark hair
+            const skirtMaterial = new THREE.MeshStandardMaterial({ color: 0x6a90ab, flatShading: true }); // Blueish gray for skirt
+            const faceFeatureMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, flatShading: true }); // Black for eyes/mouth
+
+            // Body (Torso)
+            const bodyPharaoh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.8, 1.4, 0.6), // Slightly tapered look
+                bodyMaterial
+            );
+            bodyPharaoh.position.y = 1.0; // Adjust position to be above ground
+            bodyPharaoh.castShadow = true;
+            bodyPharaoh.receiveShadow = true;
+            bodyPharaoh.userData.isPharaohBody = true; // Custom property for identification
+            pharaoh.add(bodyPharaoh);
+
+            // Head
+            const headPharaoh = new THREE.Mesh(
+                new THREE.BoxGeometry(1, 1.1, 1),
+                skinMaterial
+            );
+            headPharaoh.position.y = 2.2; // Position above body
+            headPharaoh.castShadow = true;
+            headPharaoh.receiveShadow = true;
+            headPharaoh.userData.isPharaohHead = true; // Custom property
+            pharaoh.add(headPharaoh);
+
+            // --- Cute Face Features ---
+            // Eyes
+            const eyeGeometry = new THREE.BoxGeometry(0.15, 0.15, 0.05); // Small square eyes
+            const eye1 = new THREE.Mesh(eyeGeometry, faceFeatureMaterial);
+            eye1.position.set(-0.25, 0.15, 0.51); // Relative to headPharaoh
+            headPharaoh.add(eye1);
+
+            const eye2 = new THREE.Mesh(eyeGeometry, faceFeatureMaterial);
+            eye2.position.set(0.25, 0.15, 0.51); // Relative to headPharaoh
+            headPharaoh.add(eye2);
+
+            // Mouth
+            const mouthGeometry = new THREE.BoxGeometry(0.3, 0.1, 0.05); // Small rectangular mouth
+            const mouth = new THREE.Mesh(mouthGeometry, faceFeatureMaterial);
+            mouth.position.set(0, -0.15, 0.51); // Relative to headPharaoh, below eyes
+            headPharaoh.add(mouth);
+
+
+            // Hair spikes (mimicking the spiky silhouette from the image)
+            const hairSpikeBaseGeom = new THREE.ConeGeometry(0.25, 1.0, 4); // Wider base, shorter height
+            const hairSpikeSideGeom = new THREE.ConeGeometry(0.2, 0.8, 4);
+
+            // Back/Top spikes
+            const spike1 = new THREE.Mesh(hairSpikeBaseGeom, hairMaterial);
+            spike1.position.set(0, 0.8, -0.4); // Back-top
+            spike1.rotation.x = Math.PI / 4;
+            headPharaoh.add(spike1);
+
+            const spike2 = new THREE.Mesh(hairSpikeBaseGeom, hairMaterial);
+            spike2.position.set(0.4, 0.8, -0.2); // Right-back
+            spike2.rotation.x = Math.PI / 4;
+            spike2.rotation.y = Math.PI / 4;
+            headPharaoh.add(spike2);
+
+            const spike3 = new THREE.Mesh(hairSpikeBaseGeom, hairMaterial);
+            spike3.position.set(-0.4, 0.8, -0.2); // Left-back
+            spike3.rotation.x = Math.PI / 4;
+            spike3.rotation.y = -Math.PI / 4;
+            headPharaoh.add(spike3);
+
+            // Side spikes (more horizontal, shorter)
+            const spike4 = new THREE.Mesh(hairSpikeSideGeom, hairMaterial);
+            spike4.position.set(0.6, 0.5, 0); // Right side
+            spike4.rotation.z = -Math.PI / 2; // Point outwards
+            headPharaoh.add(spike4);
+
+            const spike5 = new THREE.Mesh(hairSpikeSideGeom, hairMaterial);
+            spike5.position.set(-0.6, 0.5, 0); // Left side
+            spike5.rotation.z = Math.PI / 2; // Point outwards
+            headPharaoh.add(spike5);
+
+            // Golden Crown (separate mesh)
+            const crownBase = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.6, 0.2, 6), goldMaterial);
+            crownBase.position.y = 0.5; // Sits on top of the head
+            headPharaoh.add(crownBase);
+
+            // Crown front detail/spike
+            const crownFrontSpike = new THREE.Mesh(new THREE.ConeGeometry(0.2, 0.4, 4), goldMaterial);
+            crownFrontSpike.position.set(0, 0.6, 0.5); // Front-top of crown
+            crownFrontSpike.rotation.x = -Math.PI / 10;
+            headPharaoh.add(crownFrontSpike);
+
+            // Arms (slightly thinner and longer)
+            const armGeometry = new THREE.BoxGeometry(0.25, 1.0, 0.25); // Adjusted height
+            const armPharaoh1 = new THREE.Mesh(armGeometry, skinMaterial);
+            armPharaoh1.position.set(-0.6, 0.3, 0); // Relative to bodyPharaoh
+            armPharaoh1.castShadow = true;
+            armPharaoh1.userData.isPharaohArm = true;
+            bodyPharaoh.add(armPharaoh1);
+
+            const armPharaoh2 = new THREE.Mesh(armGeometry, skinMaterial);
+            armPharaoh2.position.set(0.6, 0.3, 0); // Relative to bodyPharaoh
+            armPharaoh2.castShadow = true;
+            armPharaoh2.userData.isPharaohArm = true;
+            bodyPharaoh.add(armPharaoh2);
+
+            // Legs (slightly thinner and longer)
+            const legGeometry = new THREE.BoxGeometry(0.3, 1.3, 0.3); // Adjusted height
+            const legPharaoh1 = new THREE.Mesh(legGeometry, skinMaterial);
+            legPharaoh1.position.set(-0.25, -0.7, 0); // Relative to bodyPharaoh
+            legPharaoh1.castShadow = true;
+            legPharaoh1.userData.isPharaohLeg = true;
+            bodyPharaoh.add(legPharaoh1);
+
+            const legPharaoh2 = new THREE.Mesh(legGeometry, skinMaterial);
+            legPharaoh2.position.set(0.25, -0.7, 0); // Relative to bodyPharaoh
+            legPharaoh2.castShadow = true;
+            legPharaoh2.userData.isPharaohLeg = true;
+            bodyPharaoh.add(legPharaoh2);
+
+            // Shoulder Pads (more pronounced)
+            const shoulderPadGeometry = new THREE.BoxGeometry(0.5, 0.2, 0.8); // Wider
+            const shoulderPad1 = new THREE.Mesh(shoulderPadGeometry, goldMaterial);
+            shoulderPad1.position.set(-0.6, 0.6, 0); // Relative to bodyPharaoh's upper part
+            shoulderPad1.castShadow = true;
+            bodyPharaoh.add(shoulderPad1);
+
+            const shoulderPad2 = new THREE.Mesh(shoulderPadGeometry, goldMaterial);
+            shoulderPad2.position.set(0.6, 0.6, 0); // Relative to bodyPharaoh's upper part
+            shoulderPad2.castShadow = true;
+            bodyPharaoh.add(shoulderPad2);
+
+            // Bracers (more like actual forearm armor)
+            const bracerGeometry = new THREE.BoxGeometry(0.28, 0.4, 0.28); // Taller
+            const bracer1 = new THREE.Mesh(bracerGeometry, goldMaterial);
+            bracer1.position.set(0, -0.3, 0); // On lower arm, relative to arm mesh
+            bracer1.castShadow = true;
+            armPharaoh1.add(bracer1);
+
+            const bracer2 = new THREE.Mesh(bracerGeometry, goldMaterial);
+            bracer2.position.set(0, -0.3, 0); // On lower arm, relative to arm mesh
+            bracer2.castShadow = true;
+            armPharaoh2.add(bracer2);
+
+            // Boots (shin armor effect)
+            const bootGeometry = new THREE.BoxGeometry(0.35, 0.4, 0.5); // Taller
+            const boot1 = new THREE.Mesh(bootGeometry, goldMaterial);
+            boot1.position.set(0, -0.6, 0); // At bottom of leg
+            boot1.castShadow = true;
+            legPharaoh1.add(boot1);
+
+            const boot2 = new THREE.Mesh(bootGeometry, goldMaterial);
+            boot2.position.set(0, -0.6, 0); // At bottom of leg
+            boot2.castShadow = true;
+            legPharaoh2.add(boot2);
+
+            // Belt (kept as is)
+            const belt = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.2, 0.7), goldMaterial);
+            belt.position.y = 0.4; // Around waist
+            belt.castShadow = true;
+            bodyPharaoh.add(belt);
+
+            // Skirt/Loincloth part (kept as is)
+            const skirt = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.1), skirtMaterial);
+            skirt.position.set(0, -0.3, 0.3); // Hangs from belt
+            skirt.rotation.x = -Math.PI / 10; // Slight forward tilt
+            skirt.castShadow = true;
+            bodyPharaoh.add(skirt);
+
+
+            // Cape (more intricate, angular folds)
+            const capeGroup = new THREE.Group();
+
+            // Main back panel
+            const capeBack = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.5, 0.1), capeMaterial);
+            capeBack.position.set(0, 0.1, -0.7);
+            capeBack.rotation.x = -Math.PI / 12;
+            capeBack.castShadow = true;
+            capeGroup.add(capeBack);
+
+            // Left fold
+            const capeFoldLeft = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.0, 0.1), capeMaterial);
+            capeFoldLeft.position.set(-1.0, 0.5, -0.5);
+            capeFoldLeft.rotation.set(-Math.PI / 8, -Math.PI / 6, 0); // Angle down and inwards
+            capeFoldLeft.castShadow = true;
+            capeGroup.add(capeFoldLeft);
+
+            // Right fold
+            const capeFoldRight = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.0, 0.1), capeMaterial);
+            capeFoldRight.position.set(1.0, 0.5, -0.5);
+            capeFoldRight.rotation.set(-Math.PI / 8, Math.PI / 6, 0); // Angle down and inwards
+            capeFoldRight.castShadow = true;
+            capeGroup.add(capeFoldRight);
+
+            // Attach the entire cape group to the body
+            bodyPharaoh.add(capeGroup);
+
+            return pharaoh;
+        }
+
+        /**
+         * Replaces the current character with the Pharaoh character.
+         */
+        function changeCharacterToPharaoh() {
+            // Remove the old character from the scene
+            if (characterGroup) {
+                scene.remove(characterGroup);
+                // Dispose of its geometry and materials to free up memory
+                characterGroup.traverse(function(object) {
+                    if (object.isMesh) {
+                        object.geometry.dispose();
+                        object.material.dispose();
+                    }
+                });
+            }
+
+            // Create and add the new Pharaoh character
+            characterGroup = createPharaohCharacter();
+            characterGroup.position.copy(townCenter); // Respawn at town center
+            scene.add(characterGroup);
+
+            // Update global animation references to the new character's parts
+            updateCharacterAnimationRefs();
+
+            // Re-attach the gun to the new character's arm with the corrected default orientation
+            pharaohGun = createPharaohGun(); // Recreate gun if needed
+            if (currentArm2) {
+                pharaohGun.position.set(0.0, 0.0, 0.6); // Position in front of the arm
+                pharaohGun.rotation.set(0, 0, 0); // Default orientation (barrel forward, right-side up)
+                currentArm2.add(pharaohGun);
+            } else {
+                console.warn("currentArm2 is undefined during character change. Cannot attach gun.");
+            }
+
+            // Reset camera angle to avoid weird jumps if the camera was rotated a lot
+            cameraRotationAngle = 0;
+            // Also reset respawn timer and flag
+            redShrineTimer = 0;
+            isInRedShrine = false;
+        }
+
+        /**
+         * MusicPlayer Class to manage background music with effects and a playlist.
+         * Encapsulates Tone.js setup and playback logic.
+         */
+        class MusicPlayer {
+            constructor(songUrls, volume = -15, filterFrequency = 800, reverbDecay = 5, reverbWet = 0.3) {
+                this.songUrls = songUrls;
+                this.currentSongIndex = 0;
+                this.player = null;
+                this.reverb = null;
+                this.filter = null;
+                this.volume = volume;
+                this.filterFrequency = filterFrequency;
+                this.reverbDecay = reverbDecay;
+                this.reverbWet = reverbWet;
+                this.isInitialized = false;
+            }
+
+            /**
+             * Initializes Tone.js audio context and effects.
+             * This must be called after a user gesture.
+             */
+            async initAudio() {
+                if (this.isInitialized) return;
+
+                try {
+                    await Tone.start();
+                    console.log("Tone.js audio context started.");
+
+                    this.reverb = new Tone.Reverb({
+                        decay: this.reverbDecay,
+                        wet: this.reverbWet
+                    }).toDestination();
+
+                    this.filter = new Tone.Filter({
+                        frequency: this.filterFrequency,
+                        Q: 1,
+                        type: "lowpass"
+                    }).connect(this.reverb);
+
+                    this.player = new Tone.Player({
+                        loop: false,
+                        volume: this.volume
+                    }).connect(this.filter);
+
+                    this.player.onStop = () => this.playNextSong();
+                    this.isInitialized = true;
+                } catch (e) {
+                    console.error("Error initializing audio:", e);
+                }
+            }
+
+            /**
+             * Plays the next song in the playlist.
+             * If the player is not initialized, it will try to initialize it first.
+             */
+            async playNextSong() {
+                if (!this.isInitialized) {
+                    await this.initAudio();
+                }
+
+                if (this.songUrls.length === 0) {
+                    console.warn("No songs in playlist.");
+                    return;
+                }
+
+                const url = this.songUrls[this.currentSongIndex];
+                console.log(`Attempting to load and play: ${url}`);
+
+                try {
+                    // Stop current playback if any
+                    if (this.player.state === "started") {
+                        this.player.stop();
+                    }
+                    await this.player.load(url);
+                    this.player.start();
+                    this.currentSongIndex = (this.currentSongIndex + 1) % this.songUrls.length;
+                } catch (e) {
+                    console.error(`Error loading or playing song ${url}:`, e);
+                    // Try to play the next song if current one fails
+                    this.currentSongIndex = (this.currentSongIndex + 1) % this.songUrls.length;
+                    this.playNextSong(); 
+                }
+            }
+
+            /**
+             * Starts the music playback from the current song index.
+             */
+            async start() {
+                await this.playNextSong();
+            }
+
+            /**
+             * Stops the music playback.
+             */
+            stop() {
+                if (this.player && this.player.state === "started") {
+                    this.player.stop();
+                }
+            }
+        }
+
+        // Define song URLs for the MusicPlayer
+        const songUrls = [
+            "https://raw.githubusercontent.com/lmpulsive/resources/main/audio/song1.mp3",
+            "https://raw.githubusercontent.com/lmpulsive/resources/main/audio/song2.mp3",
+            "https://raw.githubusercontent.com/lmpulsive/resources/main/audio/song3.mp3",
+            "https://raw.githubusercontent.com/lmpulsive/resources/main/audio/song4.mp3",
+            "https://raw.githubusercontent.com/lmpulsive/resources/main/audio/song5.mp3"
+        ];
+        
+        // Create an instance of the MusicPlayer
+        musicPlayer = new MusicPlayer(songUrls);
+
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta(); // Time elapsed since last frame
+            // Using a higher base speed for faster movement
+            const moveSpeed = 12 * delta; // Adjusted for faster movement
+
+            let isMoving = false; // Flag to check if character is moving
+
+            // --- Player Jump Physics ---
+            if (keys[' '] && !isJumping && characterGroup.position.y <= 0.05) { // Check if on ground
+                isJumping = true;
+                jumpVelocity = initialJumpSpeed;
+            }
+
+            if (isJumping) {
+                characterGroup.position.y += jumpVelocity * delta;
+                jumpVelocity += gravity * delta;
+
+                // Land on ground
+                if (characterGroup.position.y < 0) {
+                    characterGroup.position.y = 0;
+                    isJumping = false;
+                    jumpVelocity = 0;
+                }
+            }
+
+
+            // --- Player Movement and Rotation ---
+            let moveDirection = new THREE.Vector3();
+            let tempCameraDirection = new THREE.Vector3();
+            camera.getWorldDirection(tempCameraDirection); // Get camera's forward direction
+            tempCameraDirection.y = 0; // Ignore vertical component for horizontal movement
+            tempCameraDirection.normalize();
+
+            let rightDirection = new THREE.Vector3();
+            rightDirection.crossVectors(new THREE.Vector3(0, 1, 0), tempCameraDirection).normalize(); // Perpendicular to camera forward, on XZ plane
+
+            let dz = 0; // forward/backward movement relative to camera
+            let dx = 0; // left/right movement relative to camera
+
+            if (keys['w']) dz = 1;
+            if (keys['s']) dz = -1;
+            if (keys['a']) dx = -1;
+            if (keys['d']) dx = 1;
+
+            // If there's movement, construct the moveDirection vector
+            if (dx !== 0 || dz !== 0) {
+                isMoving = true;
+
+                // Combine camera's forward and right vectors based on input
+                let forwardMovement = new THREE.Vector3().copy(tempCameraDirection).multiplyScalar(dz); 
+                let rightMovement = new THREE.Vector3().copy(rightDirection).multiplyScalar(-dx); 
+
+                moveDirection.add(forwardMovement).add(rightMovement);
+                moveDirection.normalize(); // Normalize to ensure consistent speed in all directions
+            } else {
+                isMoving = false;
+            }
+
+            // Store previous position for rotation calculation
+            const prevCharacterPos = characterGroup.position.clone(); 
+            // Calculate proposed new position based on input
+            let proposedPosition = characterGroup.position.clone().add(moveDirection.clone().multiplyScalar(moveSpeed));
+            
+            let onMountain = false;
+            let highestGroundY = 0; // To track the highest ground for character to stand on
+
+            // --- Collision Detection with Obstacles (Spheres and Cones) ---
+            for (const obstacleMesh of collidableMeshes) {
+                if (!obstacleMesh.userData.isCollidable) continue; 
+
+                const obstacleWorldPos = obstacleMesh.position;
+                const collisionType = obstacleMesh.userData.collisionType;
+
+                if (collisionType === 'sphere') {
+                    const obstacleRadius = obstacleMesh.userData.collisionRadius;
+                    const combinedRadius = characterCollisionRadius + obstacleRadius;
+
+                    // Project character's proposed XZ position
+                    const potentialCharacterCenterXZ = new THREE.Vector2(proposedPosition.x, proposedPosition.z);
+                    const obstacleCenterXZ = new THREE.Vector2(obstacleWorldPos.x, obstacleWorldPos.z);
+
+                    const distanceXZ = potentialCharacterCenterXZ.distanceTo(obstacleCenterXZ);
+
+                    if (distanceXZ < combinedRadius) {
+                        // Collision in XZ, project character out
+                        const overlap = combinedRadius - distanceXZ;
+                        // Calculate normal vector from obstacle to character
+                        const normalXZ = new THREE.Vector2(potentialCharacterCenterXZ.x - obstacleCenterXZ.x, potentialCharacterCenterXZ.y - obstacleCenterXZ.y).normalize();
+                        
+                        // Adjust proposed X and Z to prevent overlap
+                        proposedPosition.x += normalXZ.x * overlap;
+                        proposedPosition.z += normalXZ.y * overlap; 
+                    }
+                } else if (collisionType === 'cone') { // For mountains (cones)
+                    const mountainRadius = obstacleMesh.userData.radius;
+                    const mountainHeight = obstacleMesh.userData.height;
+                    const mountainBaseY = obstacleMesh.userData.baseY; // Use stored base Y
+
+                    // Character's proposed XZ position relative to mountain center
+                    const dx = proposedPosition.x - obstacleWorldPos.x;
+                    const dz = proposedPosition.z - obstacleWorldPos.z;
+                    const distXZ = Math.sqrt(dx * dx + dz * dz);
+
+                    // If horizontally within the mountain's sphere of influence (base radius + character radius)
+                    if (distXZ <= mountainRadius + characterCollisionRadius) {
+                        let targetMountainY = mountainBaseY; // Default to mountain base level
+                        if (distXZ < mountainRadius) { // If strictly within the cone's base horizontally
+                            // Calculate target Y on the cone surface based on distance from center
+                            targetMountainY = mountainBaseY + mountainHeight * (1 - distXZ / mountainRadius);
+                        }
+                        
+                        // Update highestGroundY for current character position
+                        highestGroundY = Math.max(highestGroundY, targetMountainY);
+
+                        // If character tries to move into the side of the mountain horizontally (at base level or lower part)
+                        if (distXZ > mountainRadius - characterCollisionRadius && characterGroup.position.y < targetMountainY + characterCollisionRadius) {
+                            const overlap = (characterCollisionRadius + mountainRadius) - distXZ;
+                             if (overlap > 0) {
+                                 const pushOutDirection = new THREE.Vector3(dx, 0, dz).normalize().multiplyScalar(overlap);
+                                 proposedPosition.x += pushOutDirection.x;
+                                 proposedPosition.z += pushOutDirection.z;
+                             }
+                        }
+                    }
+                }
+            }
+            
+            // --- Apply vertical (climbing/gravity) based on highest ground found ---
+            if (characterGroup.position.y < highestGroundY) {
+                // If character is below a mountain surface, climb to it
+                characterGroup.position.y = highestGroundY;
+                onMountain = true;
+                isJumping = false; // Reset jump state if landing on or climbing mountain
+                jumpVelocity = 0;
+            } else if (characterGroup.position.y > highestGroundY + 0.1 && !isJumping) { // If character is above ground/mountain and not jumping
+                // If character moves off a mountain or falls, apply gravity
+                characterGroup.position.y += gravity * delta;
+                // Clamp to ground if fallen below it
+                if (characterGroup.position.y < 0) {
+                    characterGroup.position.y = 0;
+                    jumpVelocity = 0; // Stop vertical movement
+                }
+            } else if (!isJumping && characterGroup.position.y <= 0.05) {
+                // If character is on ground and not jumping, ensure y is 0
+                characterGroup.position.y = 0;
+                jumpVelocity = 0;
+            }
+
+            // Apply adjusted horizontal position
+            characterGroup.position.x = proposedPosition.x;
+            characterGroup.position.z = proposedPosition.z;
+
+            // --- Map Boundary Collision ---
+            const maxAllowedX = mapHalfSize - characterCollisionRadius;
+            const maxAllowedZ = mapHalfSize - characterCollisionRadius;
+
+            characterGroup.position.x = Math.max(-maxAllowedX, Math.min(maxAllowedX, characterGroup.position.x));
+            characterGroup.position.z = Math.max(-maxAllowedZ, Math.min(maxAllowedZ, characterGroup.position.z));
+
+
+            // Update character rotation only if there was effective horizontal movement
+            // Compare current position to previous position to see if actual movement occurred
+            if (new THREE.Vector2(characterGroup.position.x - prevCharacterPos.x, characterGroup.position.z - prevCharacterPos.z).lengthSq() > 0.0001) { // Use a small epsilon
+                const effectiveMoveDir = new THREE.Vector3(characterGroup.position.x - prevCharacterPos.x, 0, characterGroup.position.z - prevCharacterPos.z).normalize();
+                const targetRotationY = Math.atan2(effectiveMoveDir.x, effectiveMoveDir.z);
+                characterGroup.rotation.y = lerpAngles(
+                    characterGroup.rotation.y,
+                    targetRotationY,
+                    0.1 // Interpolation factor for smooth turning
+                );
+            }
+
+
+            // Character Animation Logic (Simplified State Machine) - applies to any characterGroup
+            // Check if there's any effective horizontal movement for running animation
+            const hasEffectiveHorizontalMovement = (characterGroup.position.x !== prevCharacterPos.x || characterGroup.position.z !== prevCharacterPos.z);
+
+            if (isJumping) {
+                // Jump animation
+                // Legs slightly tucked
+                if (currentLeg1) currentLeg1.rotation.x = -Math.PI / 6;
+                if (currentLeg2) currentLeg2.rotation.x = -Math.PI / 6;
+                // Arms slightly raised
+                if (currentArm1) currentArm1.rotation.x = Math.PI / 8;
+                if (currentArm2) currentArm2.rotation.x = Math.PI / 8;
+                // Head stable during jump
+                if (currentHead) currentHead.rotation.x = 0; 
+            } else if (isMoving && hasEffectiveHorizontalMovement) { // Only animate run if keys are pressed AND character is actually moving
+                // Run animation parameters
+                const runCycleSpeed = 18; // Slightly faster for more pronounced run animation
+                const runPhase = clock.getElapsedTime() * runCycleSpeed;
+
+                // Use the updated global references for animation
+                // Leg swing (more exaggerated for running)
+                const swingAmplitude = 0.5; // Increased swing amplitude for more energetic run
+                if(currentLeg1) currentLeg1.rotation.x = Math.sin(runPhase) * swingAmplitude;
+                if(currentLeg2) currentLeg2.rotation.x = -Math.sin(runPhase) * swingAmplitude; // Opposite phase
+
+                // Arm swing (similar to legs, but adjusted)
+                const armSwingAmplitude = 0.4; // Amplitude for arm swing
+                if(currentArm1) currentArm1.rotation.x = Math.sin(runPhase + Math.PI / 2) * armSwingAmplitude; // Offset phase for natural arm movement
+                if(currentArm2) currentArm2.rotation.x = -Math.sin(runPhase + Math.PI / 2) * armSwingAmplitude; // Opposite phase
+
+                // Body vertical bounce (more pronounced for running)
+                const bounceAmplitude = 0.25; // Increased bounce amplitude
+                characterGroup.position.y = Math.abs(Math.sin(runPhase * 0.5)) * bounceAmplitude;
+
+                // Head bob (more pronounced for running)
+                const headBobAmplitude = 0.12; // Increased head bob amplitude
+                if (currentHead) currentHead.rotation.x = Math.sin(runPhase * 0.5) * headBobAmplitude;
+            } else {
+                // Idle animation
+                const idleCycleSpeed = 2; // Slower for idle
+                const idlePhase = clock.getElapsedTime() * idleCycleSpeed;
+
+                // Reset limbs to neutral position for idle (unless already in a jump)
+                if (currentLeg1) currentLeg1.rotation.x = 0;
+                if (currentLeg2) currentLeg2.rotation.x = 0;
+                if (currentArm1) currentArm1.rotation.x = 0;
+                if (currentArm2) currentArm2.rotation.x = 0;
+
+                // Gentle breathing/idle bounce - ONLY if not jumping, otherwise jump handles Y position
+                if (!isJumping) {
+                    const idleBounce = Math.sin(idlePhase) * 0.05; // Smaller bounce for idle
+                    characterGroup.position.y = Math.max(0, idleBounce); // Ensure it doesn't go below ground (y=0)
+                }
+
+                // Subtle head bob for idle
+                const idleHeadBob = Math.sin(idlePhase * 1.5) * 0.02; // Faster, smaller head movement
+                if (currentHead) currentHead.rotation.x = idleHeadBob;
+            }
+
+
+            // Update general wind particles position and reset if they go too low or out of draw distance
+            const particlePositions = windParticles.geometry.attributes.position.array;
+            const particleResetHeight = characterGroup.position.y + 40; // Reset particles well above character
+            const fallSpeedFactor = 3; // Reduced from 10 to 3 for slower fall
+
+            for (let i = 0; i < particlePositions.length; i += 3) {
+                // Apply fall
+                particlePositions[i + 1] -= (0.5 + Math.random() * 0.5) * delta * fallSpeedFactor;
+
+                // Apply horizontal wind drift
+                particlePositions[i] += (Math.random() - 0.5) * windDriftSpeed * delta; // X drift
+                particlePositions[i + 2] += (Math.random() - 0.5) * windDriftSpeed * delta; // Z drift
+
+                // Check distance from character to particle for culling
+                const dx = particlePositions[i] - characterGroup.position.x;
+                const dz = particlePositions[i + 2] - characterGroup.position.z;
+                const distance = Math.sqrt(dx * dx + dz * dz);
+
+                // Reset conditions: fallen too low OR out of draw distance
+                if (particlePositions[i + 1] < characterGroup.position.y - 2 || distance > snowDrawDistance) {
+                    // Reset particle to a new random position within the draw distance from the character
+                    particlePositions[i] = characterGroup.position.x + (Math.random() * 2 * snowDrawDistance - snowDrawDistance) * 2; // Roughly twice the draw distance for wider spread
+                    particlePositions[i + 1] = particleResetHeight + (Math.random() * 10); // Reset higher
+                    particlePositions[i + 2] = characterGroup.position.z + (Math.random() * 2 * snowDrawDistance - snowDrawDistance) * 2; // Roughly twice the draw distance for wider spread
+                }
+            }
+            windParticles.geometry.attributes.position.needsUpdate = true; // Important: tell Three.js to update vertex data
+
+
+            // --- Snow Kick-up Particles Animation ---
+            if (isMoving) {
+                // Emit new particles (simple emission based on delta time)
+                const particlesToEmit = Math.floor(kickUpEmitRate * delta);
+                for (let i = 0; i < kickUpCount; i++) { // Loop through pool, not just emitting
+                    const p = kickUpParticlePool[i];
+                    if (p.lifespan <= 0) { // Only emit if particle is "dead"
+                        p.x = characterGroup.position.x + (Math.random() - 0.5) * 1.5; // Near feet
+                        p.y = characterGroup.position.y + 0.5; // Just above ground
+                        p.z = characterGroup.position.z + (Math.random() - 0.5) * 1.5;
+
+                        p.vx = (Math.random() - 0.5) * 2;
+                        p.vy = Math.random() * 3 + 1;
+                        p.vz = (Math.random() - 0.5) * 2;
+                        p.lifespan = p.maxLifespan; // Use individual maxLifespan
+                        p.size = 0.2; // Initial size
+                        break; // Emit one and break, next frame will emit another if needed
+                    }
+                }
+            }
+
+            // Update existing kick-up particles
+            for (let i = 0; i < kickUpCount; i++) {
+                const p = kickUpParticlePool[i];
+                if (p.lifespan > 0) {
+                    p.lifespan -= delta;
+
+                    p.x += p.vx * delta;
+                    p.y += p.vy * delta;
+                    p.z += p.vz * delta;
+                    p.vy -= 9.8 * delta; // Gravity
+
+                    kickUpPositions[i * 3] = p.x;
+                    kickUpPositions[i * 3 + 1] = p.y;
+                    kickUpPositions[i * 3 + 2] = p.z;
+
+                    kickUpSizes[i] = (p.lifespan / p.maxLifespan) * p.size; // Fade out based on lifespan
+                } else {
+                    kickUpPositions[i * 3 + 1] = -1000; // Move off-screen
+                    kickUpSizes[i] = 0;
+                }
+            }
+            kickUpGeometry.attributes.position.needsUpdate = true;
+            kickUpGeometry.attributes.size.needsUpdate = true;
+
+
+            // --- Gun Glow Particles Animation ---
+            // These particles are children of the gun, so their positions are relative to the gun.
+            // No need to copy pharaohGun.position, as they're already in the gun's local space.
+            const gunGlowPositions = gunGlowParticles.geometry.attributes.position.array;
+            const gunGlowSizes = gunGlowParticles.geometry.attributes.size.array;
+            for (let i = 0; i < gunGlowParticleCount; i++) {
+                const p = gunGlowParticlePool[i];
+                if (p.lifespan <= 0) {
+                    // Reset particle: Emit from a random point around the gun's origin (0,0,0 in gun's local space)
+                    const spawnRadius = 0.5; // Max distance from gun center
+                    p.x = (Math.random() - 0.5) * spawnRadius;
+                    p.y = (Math.random() - 0.5) * spawnRadius;
+                    p.z = (Math.random() - 0.5) * spawnRadius;
+                    
+                    // Subtle velocity for floating effect
+                    p.vx = (Math.random() - 0.5) * 0.2;
+                    p.vy = (Math.random() * 0.5 + 0.1); // Slightly upward drift
+                    p.vz = (Math.random() - 0.5) * 0.2;
+                    p.lifespan = p.maxLifespan;
+                    p.size = 0.15 + Math.random() * 0.1;
+                } else {
+                    p.lifespan -= delta;
+                    p.x += p.vx * delta;
+                    p.y += p.vy * delta;
+                    p.z += p.vz * delta;
+                    // Apply very subtle "wind" or drift specific to gun particles
+                    p.vx += (Math.random() - 0.5) * 0.05 * delta;
+                    p.vz += (Math.random() - 0.5) * 0.05 * delta;
+
+                    gunGlowPositions[i * 3] = p.x;
+                    gunGlowPositions[i * 3 + 1] = p.y;
+                    gunGlowPositions[i * 3 + 2] = p.z;
+                    gunGlowSizes[i] = (p.lifespan / p.maxLifespan) * p.size; // Fade out
+                }
+            }
+            gunGlowParticles.geometry.attributes.position.needsUpdate = true;
+            gunGlowParticles.geometry.attributes.size.needsUpdate = true;
+
+
+            // --- Shrine Particle Animation (Red Shrine) ---
+            const redShrineCenter = redCrystalHeart ? redCrystalHeart.position : new THREE.Vector3(-10, 4, 0); // Fallback
+            const redParticlePositions = redShrineParticles.geometry.attributes.position.array;
+            const redParticleSizes = redShrineParticles.geometry.attributes.size.array;
+            for (let i = 0; i < shrineParticleCount; i++) {
+                const p = redShrineParticlePool[i];
+                if (p.lifespan <= 0) {
+                    // Reset particle: Emit from center of the crystal, higher velocity for "energy"
+                    p.x = redShrineCenter.x + (Math.random() - 0.5) * 0.5;
+                    p.y = redShrineCenter.y + (Math.random() - 0.5) * 0.5;
+                    p.z = redShrineCenter.z + (Math.random() - 0.5) * 0.5;
+                    
+                    // Stronger outward velocity
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 2 + Math.random() * 3; // Faster
+                    p.vx = Math.cos(angle) * speed * (Math.random() > 0.5 ? 1 : -1); // More random spread
+                    p.vy = 2.0 + Math.random() * 4.0; // Stronger upward burst
+                    p.vz = Math.sin(angle) * speed * (Math.random() > 0.5 ? 1 : -1);
+                    p.lifespan = p.maxLifespan;
+                    p.size = 0.4 + Math.random() * 0.4; // Larger initial size
+                } else {
+                    p.lifespan -= delta;
+                    p.x += p.vx * delta;
+                    p.y += p.vy * delta;
+                    p.z += p.vz * delta;
+                    p.vy -= 1.5 * delta; // More prominent "gravity" to make them arc down, like flames
+
+                    redParticlePositions[i * 3] = p.x;
+                    redParticlePositions[i * 3 + 1] = p.y;
+                    redParticlePositions[i * 3 + 2] = p.z;
+                    redParticleSizes[i] = (p.lifespan / p.maxLifespan) * p.size; // Fade out
+                }
+            }
+            redShrineParticles.geometry.attributes.position.needsUpdate = true;
+            redShrineParticles.geometry.attributes.size.needsUpdate = true;
+
+
+            // --- Shrine Particle Animation (Blue Shrine) ---
+            const blueShrineCenter = blueCrystalHeart ? blueCrystalHeart.position : new THREE.Vector3(10, 4, 0); // Fallback
+            const blueParticlePositions = blueShrineParticles.geometry.attributes.position.array;
+            const blueParticleSizes = blueShrineParticles.geometry.attributes.size.array;
+            for (let i = 0; i < shrineParticleCount; i++) {
+                const p = blueShrineParticlePool[i];
+                if (p.lifespan <= 0) {
+                    // Reset particle: Emit from center of the crystal, higher velocity for "energy"
+                    p.x = blueShrineCenter.x + (Math.random() - 0.5) * 0.5;
+                    p.y = blueShrineCenter.y + (Math.random() - 0.5) * 0.5;
+                    p.z = blueShrineCenter.z + (Math.random() - 0.5) * 0.5;
+
+                    // Stronger upward velocity for blue energy
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = 2 + Math.random() * 3;
+                    p.vx = Math.cos(angle) * speed * (Math.random() > 0.5 ? 1 : -1);
+                    p.vy = 2.0 + Math.random() * 4.0; // Stronger upward burst
+                    p.vz = Math.sin(angle) * speed * (Math.random() > 0.5 ? 1 : -1);
+                    p.lifespan = p.maxLifespan;
+                    p.size = 0.4 + Math.random() * 0.4;
+                } else {
+                    p.lifespan -= delta;
+                    p.x += p.vx * delta;
+                    p.y += p.vy * delta;
+                    p.z += p.vz * delta;
+                    p.vy -= 1.5 * delta; // Slower decay for "energy" look
+
+                    blueParticlePositions[i * 3] = p.x;
+                    blueParticlePositions[i * 3 + 1] = p.y;
+                    blueParticlePositions[i * 3 + 2] = p.z;
+                    blueParticleSizes[i] = (p.lifespan / p.maxLifespan) * p.size;
+                }
+            }
+            blueShrineParticles.geometry.attributes.position.needsUpdate = true;
+            blueShrineParticles.geometry.attributes.size.needsUpdate = true;
+
+
+            // --- Sanctuary Animations ---
+            const crystalPulseSpeed = 2; // How fast the crystal pulsates
+            const orbOrbitSpeed = 0.5; // How fast the orbs orbit
+
+            if (blueCrystalHeart) {
+                blueCrystalHeart.position.y = 4 + Math.sin(clock.getElapsedTime() * crystalPulseSpeed) * 0.2; // Vertical pulse
+                blueCrystalHeart.rotation.y += delta * 0.5; // Spin slowly
+            }
+            blueFloatingOrbs.forEach(orbData => {
+                const orb = orbData.orb;
+                const orbLight = orbData.light;
+                const orbRadius = 6;
+                const orbHeight = 4;
+                const currentAngle = orbData.initialAngle + clock.getElapsedTime() * orbOrbitSpeed;
+                orb.position.x = Math.cos(currentAngle) * orbRadius;
+                orb.position.y = orbHeight + Math.sin(clock.getElapsedTime() * 2) * 0.5; // Individual bob
+                orb.position.z = Math.sin(currentAngle) * orbRadius;
+                orbLight.position.copy(orb.position); // Keep light attached to orb
+            });
+
+            if (redCrystalHeart) {
+                redCrystalHeart.position.y = 4 + Math.cos(clock.getElapsedTime() * crystalPulseSpeed) * 0.2; // Vertical pulse (offset phase)
+                redCrystalHeart.rotation.y -= delta * 0.5; // Spin slowly
+            }
+            redFloatingOrbs.forEach(orbData => {
+                const orb = orbData.orb;
+                const orbLight = orbData.light;
+                const orbRadius = 6;
+                const orbHeight = 4;
+                const currentAngle = orbData.initialAngle - clock.getElapsedTime() * orbOrbitSpeed; // Opposite orbit direction
+                orb.position.x = Math.cos(currentAngle) * orbRadius;
+                orb.position.y = orbHeight + Math.cos(clock.getElapsedTime() * 2) * 0.5; // Individual bob (offset phase)
+                orb.position.z = Math.sin(currentAngle) * orbRadius;
+                orbLight.position.copy(orb.position); // Keep light attached to orb
+            });
+
+
+            // --- Red Shrine Collision and Respawn Logic (Area Trigger) ---
+            if (redCrystalHeart && characterGroup) {
+                // Ensure redShrineParticles are positioned correctly around the redCrystalHeart
+                if (redShrineParticles) {
+                    redShrineParticles.position.copy(redCrystalHeart.position);
+                }
+
+                // Use the character's base position for this area trigger
+                const distanceToRedShrine = characterGroup.position.distanceTo(redCrystalHeart.position.clone().add(redCrystalHeart.parent.position)); // Distance to crystal's world position
+                const collisionRadius = 3; // Adjust as needed for the size of the shrine area
+
+                if (distanceToRedShrine < collisionRadius) {
+                    if (!isInRedShrine) {
+                        isInRedShrine = true;
+                        redShrineTimer = 0; // Start timer when entering
+                    }
+                    redShrineTimer += delta; // Increment timer
+                    if (redShrineTimer >= redShrineRespawnDelay) {
+                        changeCharacterToPharaoh(); // Change character and respawn
+                    }
+                } else {
+                    if (isInRedShrine) {
+                        isInRedShrine = false;
+                        redShrineTimer = 0; // Reset timer if character leaves shrine area
+                    }
+                }
+            }
+
+
+            // Update camera position to follow the character, maintaining 360-degree orbit
+            const targetX = characterGroup.position.x + Math.sin(cameraRotationAngle) * cameraDistance;
+            const targetZ = characterGroup.position.z + Math.cos(cameraRotationAngle) * cameraDistance;
+
+            camera.position.x = targetX;
+            camera.position.y = characterGroup.position.y + cameraOffsetY;
+            camera.position.z = targetZ;
+
+            camera.lookAt(characterGroup.position.x, characterGroup.position.y + 1, characterGroup.position.z); // Always look slightly above character's base
+
+            // Update player spotlight position to be directly above the player
+            if (playerSpotlight && characterGroup) {
+                playerSpotlight.position.set(
+                    characterGroup.position.x,
+                    characterGroup.position.y + spotlightHeight, // Fixed height above player
+                    characterGroup.position.z
+                );
+                playerSpotlight.target.position.copy(characterGroup.position); // Aim directly at player
+                playerSpotlight.target.updateMatrixWorld(); // Important for target to update correctly
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // --- Event listener for the overlay to start audio and hide itself ---
+        document.getElementById('overlay').addEventListener('click', async () => {
+            document.getElementById('overlay').classList.add('hidden'); // Hide the overlay
+            await musicPlayer.start(); // Start playing music using the new class
+            // Initial animation call can be placed here to ensure everything starts after user interaction
+            animate(); 
+        }, { once: true }); // Ensure this listener only fires once
+
+        // Initial setup, but animation loop will only start after user clicks overlay
+        window.onload = function () {
+            init(); // Initialize the scene, but do NOT call animate() yet
+        }
+    </script>
+</body>
+</html>
