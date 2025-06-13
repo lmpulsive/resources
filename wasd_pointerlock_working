@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <title>Three.js Foundation with Pointer Lock</title>
+    <!-- Using importmap to resolve module specifiers for Three.js and its add-ons -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module">
+        // Now, these imports will be resolved by the importmap defined above
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        // Global variables for Three.js scene elements
+        let camera, scene, renderer, controls;
+        const objects = []; // Array to hold objects for collision detection (e.g., floor, boxes)
+        let raycaster; // For ground collision detection
+
+        // Movement state variables
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        let canJump = false;
+
+        let prevTime = performance.now(); // For calculating delta time
+        const velocity = new THREE.Vector3(); // Player's current velocity
+        const direction = new THREE.Vector3(); // Temporary vector for movement direction
+        const vertex = new THREE.Vector3(); // Temporary vector for vertex manipulation
+        const color = new THREE.Color(); // Temporary color object
+
+        // Initialize the Three.js scene and controls when the window loads
+        window.onload = function() {
+            init();
+        };
+
+        function init() {
+            // Setup camera: PerspectiveCamera(FOV, Aspect Ratio, Near Plane, Far Plane)
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 1000);
+            camera.position.y = 10; // Start camera at a height above the floor
+
+            // Setup scene: where all objects and lights reside
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+            scene.fog = new THREE.Fog(0x87CEEB, 0, 750); // Fog to simulate distance
+
+            // Add lighting to the scene
+            const light = new THREE.HemisphereLight(0xeeeeff, 0x777788, 2.5); // Sky and ground light
+            light.position.set(0.5, 1, 0.75);
+            scene.add(light);
+
+            // Add the camera directly to the scene
+            scene.add(camera); // Changed from scene.add(controls.object) to scene.add(camera)
+
+            // Initialize Official PointerLockControls
+            controls = new PointerLockControls(camera, document.body); // Controls will manipulate 'camera'
+
+            // Get references to HTML elements for pointer lock instructions
+            const blocker = document.getElementById('blocker');
+            const instructions = document.getElementById('instructions');
+
+            // Event listener for clicking the instructions to initiate pointer lock
+            instructions.addEventListener('click', function () {
+                controls.lock(); // Request pointer lock
+            });
+
+            // Event listener for when pointer lock is acquired
+            controls.addEventListener('lock', function () {
+                instructions.style.display = 'none'; // Hide instructions
+                blocker.style.display = 'none'; // Hide blocker overlay
+            });
+
+            // Event listener for when pointer lock is released
+            controls.addEventListener('unlock', function () {
+                blocker.style.display = 'flex'; // Show blocker overlay
+                instructions.style.display = 'flex'; // Show instructions again
+            });
+
+            // Keyboard event handlers for player movement
+            const onKeyDown = function (event) {
+                switch (event.code) {
+                    case 'ArrowUp':
+                    case 'KeyW':
+                        moveForward = true;
+                        break;
+                    case 'ArrowLeft':
+                    case 'KeyA':
+                        moveLeft = true;
+                        break;
+                    case 'ArrowDown':
+                    case 'KeyS':
+                        moveBackward = true;
+                        break;
+                    case 'ArrowRight':
+                    case 'KeyD':
+                        moveRight = true;
+                        break;
+                    case 'Space':
+                        if (canJump === true) velocity.y += 450; // Increased jump height
+                        canJump = false; // Prevent multiple jumps mid-air
+                        break;
+                }
+            };
+
+            const onKeyUp = function (event) {
+                switch (event.code) {
+                    case 'ArrowUp':
+                    case 'KeyW':
+                        moveForward = false;
+                        break;
+                    case 'ArrowLeft':
+                    case 'KeyA':
+                        moveLeft = false;
+                        break;
+                    case 'ArrowDown':
+                    case 'KeyS':
+                        moveBackward = false;
+                        break;
+                    case 'ArrowRight':
+                    case 'KeyD':
+                        moveRight = false;
+                        break;
+                }
+            };
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+
+            // Initialize Raycaster for ground detection (origin, direction, near, far)
+            raycaster = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0), 0, 10);
+
+            // --- Floor Generation ---
+            let floorGeometry = new THREE.PlaneGeometry(2000, 2000, 100, 100);
+            floorGeometry.rotateX(-Math.PI / 2); // Rotate to be horizontal
+
+            // Apply random vertex displacement for a more interesting, uneven terrain
+            let position = floorGeometry.attributes.position;
+            for (let i = 0, l = position.count; i < l; i++) {
+                vertex.fromBufferAttribute(position, i);
+                vertex.x += Math.random() * 20 - 10; // Random X displacement
+                vertex.y += Math.random() * 2;      // Random Y (height) displacement
+                vertex.z += Math.random() * 20 - 10; // Random Z displacement
+                position.setXYZ(i, vertex.x, vertex.y, vertex.z);
+            }
+
+            floorGeometry = floorGeometry.toNonIndexed(); // Convert to non-indexed for per-vertex color
+            position = floorGeometry.attributes.position; // Get updated positions
+            const colorsFloor = [];
+
+            // Assign random colors to floor vertices for a varied look, using sRGBColorSpace
+            for (let i = 0, l = position.count; i < l; i++) {
+                color.setHSL(Math.random() * 0.3 + 0.5, 0.75, Math.random() * 0.25 + 0.75, THREE.SRGBColorSpace);
+                colorsFloor.push(color.r, color.g, color.b);
+            }
+            floorGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsFloor, 3));
+
+            const floorMaterial = new THREE.MeshBasicMaterial({ vertexColors: true });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            scene.add(floor);
+            objects.push(floor); // Add floor to objects for raycasting
+
+            // --- Obstacle Box Generation ---
+            const boxGeometry = new THREE.BoxGeometry(20, 20, 20).toNonIndexed(); // Boxes for jumping on
+            position = boxGeometry.attributes.position;
+            const colorsBox = [];
+
+            // Assign random colors to box vertices, using sRGBColorSpace
+            for (let i = 0, l = position.count; i < l; i++) {
+                color.setHSL(Math.random() * 0.3 + 0.5, 0.75, Math.random() * 0.25 + 0.75, THREE.SRGBColorSpace);
+                colorsBox.push(color.r, color.g, color.b);
+            }
+            boxGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colorsBox, 3));
+
+            // Create and position 500 random boxes
+            for (let i = 0; i < 500; i++) {
+                const boxMaterial = new THREE.MeshPhongMaterial({
+                    specular: 0xffffff,
+                    flatShading: true,
+                    vertexColors: true
+                });
+                // Ensure box material color is also set with sRGBColorSpace
+                boxMaterial.color.setHSL(Math.random() * 0.2 + 0.5, 0.75, Math.random() * 0.25 + 0.75, THREE.SRGBColorSpace);
+
+                const box = new THREE.Mesh(boxGeometry, boxMaterial);
+                box.position.x = Math.floor(Math.random() * 20 - 10) * 20;
+                box.position.y = Math.floor(Math.random() * 20) * 20 + 10;
+                box.position.z = Math.floor(Math.random() * 20 - 10) * 20;
+
+                scene.add(box);
+                objects.push(box); // Add box to objects for raycasting
+            }
+
+            // --- Renderer Setup ---
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            // Set output color space for accurate color rendering
+            renderer.outputColorSpace = THREE.SRGBColorSpace; // <-- Crucial for visual quality
+            renderer.setAnimationLoop(animate); // Use setAnimationLoop for continuous rendering
+            document.body.appendChild(renderer.domElement);
+
+            // Handle window resizing
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // Adjust camera aspect ratio and renderer size on window resize
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Main animation loop
+        function animate() {
+            const time = performance.now(); // Current time for delta calculation
+
+            if (controls.isLocked === true) {
+                const delta = (time - prevTime) / 1000; // Time elapsed since last frame in seconds
+
+                // Apply damping (friction) to horizontal velocity
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+                
+                // Apply gravity to vertical velocity
+                velocity.y -= 9.8 * 100.0 * delta; // 9.8 m/s^2 * 100 for scaling
+
+                // Reset movement direction vector for current frame
+                direction.x = 0; // Local X-axis movement (strafe)
+                direction.z = 0; // Local Z-axis movement (forward/backward)
+
+                // Set direction based on key presses
+                // If moving forward ('W' key), direction.z should be negative to align with camera's local -Z
+                if (moveForward) direction.z = -1;
+                // If moving backward ('S' key), direction.z should be positive
+                if (moveBackward) direction.z = 1;
+                // If moving left ('A' key), direction.x should be negative
+                if (moveLeft) direction.x = -1;
+                // If moving right ('D' key), direction.x should be positive
+                if (moveRight) direction.x = 1;
+
+                // Normalize diagonal movement to prevent faster speed when moving diagonally
+                if (moveForward || moveBackward || moveLeft || moveRight) {
+                    direction.normalize(); // Normalize only if there's actual movement input
+                }
+
+                // Apply movement impulse to velocity
+                // Scale movement impulse by the base speed (increased to 800.0) and delta time
+                velocity.x += direction.x * 800.0 * delta; // Increased movement speed
+                velocity.z += direction.z * 800.0 * delta; // Increased movement speed
+
+                // Apply computed velocity to camera position using controls' methods
+                // controls.moveRight moves along camera's local +X (correctly uses velocity.x)
+                controls.moveRight(velocity.x * delta);
+                // controls.moveForward moves along camera's local -Z.
+                // Since velocity.z is negative for forward movement (due to direction.z = -1),
+                // we need to negate it to make the distance parameter positive for moveForward.
+                controls.moveForward(-velocity.z * delta); 
+                
+                // Apply vertical velocity (gravity, jumps) to camera's Y position
+                camera.position.y += (velocity.y * delta); // Directly using camera.position
+
+                // --- Raycasting for Ground Collision ---
+                raycaster.ray.origin.copy(camera.position); // Directly using camera.position
+                raycaster.ray.origin.y -= 10; // Cast ray from slightly below the camera's feet
+
+                // Check for intersections with objects in the scene
+                const intersections = raycaster.intersectObjects(objects, false);
+                const onObject = intersections.length > 0; // True if ray hits an object
+
+                // If on ground/object
+                if (onObject === true) {
+                    velocity.y = Math.max(0, velocity.y); // Stop falling
+                    canJump = true; // Allow jumping
+                    // Snap player to the surface if they've fallen slightly below it
+                    if (camera.position.y < intersections[0].point.y + 10) { // Directly using camera.position
+                         camera.position.y = intersections[0].point.y + 10; // Directly using camera.position
+                    }
+                }
+
+                // Prevent player from falling indefinitely below the initial floor level
+                if (camera.position.y < 10) { // Directly using camera.position
+                    velocity.y = 0; // Stop vertical movement
+                    camera.position.y = 10; // Reset Y position to ground level // Directly using camera.position
+                    canJump = true; // Allow jumping from the floor
+                }
+            }
+
+            prevTime = time; // Update previous time for next frame's delta calculation
+            renderer.render(scene, camera); // Render the scene
+        }
+    </script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0a0a20;
+            font-family: 'Inter', Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #instructions {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            background-color: rgba(30, 58, 138, 0.8);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s ease;
+        }
+        #instructions:hover {
+            background-color: rgba(49, 78, 171, 0.9);
+        }
+        #instructions p {
+            margin: 0.5rem 0;
+        }
+        #instructions p:first-child {
+            font-size: 3rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div id="blocker">
+        <div id="instructions">
+            <p>
+                Click to play
+            </p>
+            <p>
+                Move: WASD<br/>
+                Jump: SPACE<br/>
+                Look: MOUSE
+            </p>
+        </div>
+    </div>
+</body>
+</html>
