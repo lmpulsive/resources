@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <title>Three.js FPS Game</title>
+    <!-- Import Map for Three.js Modules -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/"
+            }
+        }
+    </script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', Arial, sans-serif;
+            cursor: none; /* Hide default mouse cursor for FPS control */
+            background-color: #0a0a20; /* Default background if canvas is not yet rendered */
+        }
+        canvas {
+            display: block; /* Remove extra space below canvas */
+            width: 100%;
+            height: 100%;
+        }
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2; /* Ensure blocker is above canvas */
+        }
+        #instructions {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            background-color: rgba(30, 58, 138, 0.8);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.3s ease;
+        }
+        #instructions:hover {
+            background-color: rgba(49, 78, 171, 0.9);
+        }
+        #instructions p {
+            margin: 0.5rem 0;
+        }
+        #instructions p:first-child {
+            font-size: 3rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+        }
+        /* Custom message box style for alerts */
+        .message-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #333;
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            z-index: 1000;
+            text-align: center;
+        }
+        .message-box button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .message-box button:hover {
+            background-color: #45a049;
+        }
+
+        /* Simple Crosshair Style */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px; /* Overall width of the cross */
+            height: 20px; /* Overall height of the cross */
+            pointer-events: none; /* Allows clicks to pass through */
+            z-index: 1; /* Below blocker, above canvas */
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background-color: white;
+            border-radius: 1px; /* Slight roundness for cleaner look */
+        }
+        #crosshair::before { /* Horizontal line */
+            width: 100%;
+            height: 2px;
+            top: 50%;
+            left: 0;
+            transform: translateY(-50%);
+        }
+        #crosshair::after { /* Vertical line */
+            width: 2px;
+            height: 100%;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+    </style>
+</head>
+<body>
+    <div id="blocker">
+        <div id="instructions">
+            <p>
+                Click to play
+            </p>
+            <p>
+                Move: WASD<br/>
+                Jump: SPACE<br/>
+                Look: MOUSE
+            </p>
+        </div>
+    </div>
+    <div id="crosshair"></div>
+
+    <script type="module">
+        // --- Three.js Module Imports ---
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { Octree } from 'three/addons/math/Octree.js';
+        import { Capsule } from 'three/addons/math/Capsule.js';
+        import Stats from 'three/addons/libs/stats.module.js';
+
+        // --- GLOBAL GAME VARIABLES ---
+        let camera, scene, renderer;
+        let controls; // PointerLockControls instance
+        const clock = new THREE.Clock();
+
+        // Physics and Collision
+        const GRAVITY = 30;
+        const STEPS_PER_FRAME = 5;
+        const worldOctree = new Octree(); // Main collision world
+        const playerCollider = new Capsule( new THREE.Vector3( 0, 0.35, 0 ), new THREE.Vector3( 0, 1, 0 ), 0.35 ); // Player's collision capsule
+        // const objects = []; // Not explicitly needed for static collision world via Octree.
+
+        // Player Movement
+        const playerVelocity = new THREE.Vector3();
+        const playerDirection = new THREE.Vector3();
+        let playerOnFloor = false;
+        const keyStates = {}; // Tracks currently pressed keys
+
+        // Gun Variables (2D Viewmodel)
+        let gunMesh; // The 2D plane mesh for the gun
+        let recoil = 0; // Current recoil amount
+        let muzzleFlash; // For the muzzle flame effect
+
+        // Variables for gun animation (fixed values based on user's request)
+        const GUN_IDLE_X_OFFSET = 0.23; // Adjusted X position (moved more to the left)
+        const GUN_IDLE_Y_OFFSET = -0.20; // Adjusted Y position (moved up to connect to bottom)
+        const GUN_IDLE_Z_OFFSET = -0.5; // Base Z position for gun idle animation
+        const GUN_RECOIL_AMOUNT = 0.02; // Dramatically decreased recoil amount
+        const GUN_RECOIL_DECAY = 0.008; // Adjusted recoil decay for smoother return
+        const bobbingAmount = 0; // Bobbing animation depth set to 0
+        const bobbingSpeed = 0; // Bobbing animation speed set to 0 (irrelevant if amount is 0)
+
+        // Bullet Variables
+        const BULLET_RADIUS = 0.15; // Increased bullet radius for bigger lasers
+        const BULLET_LENGTH = 2.5; // Increased bullet length for longer lasers
+        const BULLET_SPEED = 150;
+        const BULLET_LIFETIME = 3; // seconds
+        const NUM_BULLETS = 20; // Number of bullets in the pool
+        // Changed bullet geometry to a cylinder, pre-rotated to align its length with Z-axis
+        const bulletGeometry = new THREE.CylinderGeometry( BULLET_RADIUS / 2, BULLET_RADIUS / 2, BULLET_LENGTH, 16 ).rotateX(Math.PI / 2);
+        // Changed bullet material for laser look with glow
+        const bulletMaterial = new THREE.MeshBasicMaterial( { 
+            color: 0x32CD32, // LimeGreen for base color
+            emissive: 0x7FFF00, // ChartreuseGreen for intense core glow (acts as the 'white/yellow particle effect')
+            emissiveIntensity: 8.0, // Strong glow intensity
+            transparent: true,
+            opacity: 0.6, // Slightly transparent for a beam effect
+            blending: THREE.AdditiveBlending // Crucial for light-like glow and blending
+        } );
+        const bullets = [];
+        let bulletIdx = 0; // Current index for bullet pool
+
+        // Optimization: Temporary Vectors (reused to avoid new object creation in loops)
+        const tempVector1 = new THREE.Vector3();
+        const tempVector2 = new THREE.Vector3();
+        const tempVector3 = new THREE.Vector3();
+
+        // Performance Stats Display (FPS counter)
+        const stats = new Stats();
+        stats.domElement.style.position = 'absolute';
+        stats.domElement.style.top = '0px';
+        stats.domElement.style.left = '0px';
+        document.body.appendChild( stats.domElement );
+
+        // --- INITIALIZATION ---
+        window.onload = function() {
+            init();
+        };
+
+        function init() {
+            // Camera Setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.rotation.order = 'YXZ'; // Important for correct FPS camera rotation
+            camera.position.y = 10; // Player spawn height
+
+            // Scene Setup
+            scene = new THREE.Scene();
+            // --- Skybox: Dark Space Theme ---
+            const cubeTextureLoader = new THREE.CubeTextureLoader();
+            // Using a different, more appropriate space skybox texture set
+            const spaceTexturePath = 'https://threejs.org/examples/textures/cube/MilkyWay/'; 
+            const textureUrls = [
+                spaceTexturePath + 'dark-s_px.jpg', spaceTexturePath + 'dark-s_nx.jpg',
+                spaceTexturePath + 'dark-s_py.jpg', spaceTexturePath + 'dark-s_ny.jpg',
+                spaceTexturePath + 'dark-s_pz.jpg', spaceTexturePath + 'dark-s_nz.jpg'
+            ];
+            scene.background = cubeTextureLoader.load(textureUrls);
+
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 1.0); // General ambient light
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 2.5); // Primary directional light (like sun)
+            directionalLight.position.set(-5, 25, -1).normalize();
+            directionalLight.castShadow = true; // Enable shadows from this light
+            // Configure shadow camera properties for directional light
+            directionalLight.shadow.camera.near = 0.01;
+            directionalLight.shadow.camera.far = 500;
+            directionalLight.shadow.camera.right = 30;
+            directionalLight.shadow.camera.left = -30;
+            directionalLight.shadow.camera.top = 30;
+            directionalLight.shadow.camera.bottom = -30;
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
+            directionalLight.shadow.radius = 4;
+            directionalLight.shadow.bias = -0.00006;
+            scene.add(directionalLight);
+            
+            const hemisphereLight = new THREE.HemisphereLight(0x8dc1de, 0x00668d, 1.5); // Sky and ground light
+            hemisphereLight.position.set(0.5, 1, 0.75);
+            scene.add(hemisphereLight);
+
+            scene.add(camera); // Add camera to scene (PointerLockControls will adjust its position/rotation)
+
+            // Renderer Setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true; // Enable shadow maps
+            renderer.shadowMap.type = THREE.VSMShadowMap; // Use VSM for smoother shadows
+            renderer.toneMapping = THREE.ACESFilmicToneMapping; // Cinematic tone mapping
+            document.body.appendChild(renderer.domElement); // Add canvas to HTML body
+
+            // PointerLockControls Initialization: Changed to document.body for better reliability
+            controls = new PointerLockControls(camera, document.body); 
+
+            // UI Elements for Pointer Lock Instructions
+            const blocker = document.getElementById('blocker');
+            const instructions = document.getElementById('instructions');
+
+            instructions.addEventListener('click', function () {
+                controls.lock(); // Request pointer lock on click
+            });
+
+            controls.addEventListener('lock', function () {
+                instructions.style.display = 'none';
+                blocker.style.display = 'none';
+            });
+
+            controls.addEventListener('unlock', function () {
+                blocker.style.display = 'flex';
+                instructions.style.display = 'flex';
+            });
+
+            // Pointer Lock Error Handling (uses custom message box)
+            document.addEventListener('pointerlockerror', function (event) {
+                console.error('Pointer Lock Error:', event);
+                const messageBox = document.createElement('div');
+                messageBox.className = 'message-box';
+                messageBox.innerHTML = `
+                    <p>Pointer Lock Error: Unable to lock pointer.</p>
+                    <p>Please try again or check browser settings.</p>
+                    <button onclick="this.parentNode.remove()">OK</button>
+                `;
+                document.body.appendChild(messageBox);
+            }, false);
+
+            // Keyboard Input Handlers
+            document.addEventListener( 'keydown', ( event ) => {
+                keyStates[ event.code ] = true;
+            } );
+            document.addEventListener( 'keyup', ( event ) => {
+                keyStates[ event.code ] = false;
+            } );
+
+            // Mouse Input for Shooting
+            document.addEventListener( 'mouseup', (event) => {
+                if (event.button === 0 && document.pointerLockElement !== null) { // Left click and pointer locked
+                    shootBullet();
+                }
+            } );
+
+            // Window Resize Handler
+            window.addEventListener('resize', onWindowResize);
+
+            // Load Game Assets
+            loadCollisionWorld(); // Loads the environment geometry
+            create2DViewmodelGun(); // Create and attach the 2D gun viewmodel
+
+            // Initialize Bullet Pool
+            for (let i = 0; i < NUM_BULLETS; i++) {
+                const bullet = new THREE.Mesh(bulletGeometry, bulletMaterial);
+                bullet.castShadow = true;
+                bullet.receiveShadow = true;
+                bullet.visible = false; // Bullets are hidden until shot
+                scene.add(bullet);
+                bullets.push({
+                    mesh: bullet,
+                    collider: new THREE.Sphere(new THREE.Vector3(), BULLET_RADIUS), // Collider remains sphere for simplicity
+                    velocity: new THREE.Vector3(),
+                    isActive: false, // Not active until shot
+                    lifetime: 0     // Tracks how long the bullet has been active
+                });
+            }
+
+            // Start the animation loop
+            renderer.setAnimationLoop(animate);
+        }
+
+        // --- GAME LOGIC FUNCTIONS ---
+
+        // Handles window resizing to maintain correct aspect ratio and renderer size
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Loads the main collision world GLB model
+        function loadCollisionWorld() {
+            const loader = new GLTFLoader();
+            loader.load( 'https://threejs.org/examples/models/gltf/collision-world.glb', ( gltf ) => {
+                scene.add( gltf.scene );
+                worldOctree.fromGraphNode( gltf.scene );
+
+                gltf.scene.traverse( child => {
+                    if ( child.isMesh ) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        if ( child.material.map ) {
+                            child.material.map.anisotropy = 4;
+                        }
+                    }
+                } );
+            }, function (xhr) {
+                console.log('Collision world ' + (xhr.loaded / xhr.total * 100) + '% loaded');
+            }, function (error) {
+                console.error('An error occurred while loading the collision world:', error);
+                const messageBox = document.createElement('div');
+                messageBox.className = 'message-box';
+                messageBox.innerHTML = `<p>Error loading collision world!</p><p>${error.message || 'Unknown error'}</p><button onclick="this.parentNode.remove()">OK</button>`;
+                document.body.appendChild(messageBox);
+            } );
+        }
+
+        // Creates the 2D viewmodel gun from a PNG texture and attaches it to the camera
+        function create2DViewmodelGun() {
+            const loader = new THREE.TextureLoader();
+            loader.load('https://raw.githubusercontent.com/lmpulsive/resources/main/fps/gun1.png', function(texture) {
+                const geometry = new THREE.PlaneGeometry(1.8, 1); // Adjust width/height as needed for PNG aspect ratio
+                const material = new THREE.MeshBasicMaterial({
+                    map: texture,
+                    transparent: true,
+                    // Alpha testing can help with anti-aliasing issues on transparent edges
+                    alphaTest: 0.5 
+                });
+                gunMesh = new THREE.Mesh(geometry, material);
+
+                // Attach to camera for FPS "viewmodel" effect
+                camera.add(gunMesh);
+
+                // Initial gun position (bottom right) relative to camera, using the adjusted constants
+                gunMesh.position.set(GUN_IDLE_X_OFFSET, GUN_IDLE_Y_OFFSET, GUN_IDLE_Z_OFFSET); // X: right, Y: down, Z: forward (relative to camera)
+                gunMesh.rotation.set(0, 0, 0); // No initial rotation, will be animated
+                gunMesh.scale.set(0.42, 0.42, 0.42); // Adjusted overall scale (20% bigger from previous 0.35)
+                console.log('2D Viewmodel Gun loaded and attached to camera.');
+
+                // --- Add Muzzle Flash Effect ---
+                const muzzleFlashGeometry = new THREE.ConeGeometry(0.08, 0.2, 8); // Small cone for flame shape
+                const muzzleFlashMaterial = new THREE.MeshStandardMaterial({
+                    color: 0xFF8C00, // DarkOrange
+                    emissive: 0xFFD700, // Gold for inner glow
+                    emissiveIntensity: 3.0, // Very strong glow
+                    flatShading: true,
+                    transparent: true, // For fading effect if needed
+                    opacity: 1.0 // Start opaque
+                });
+                muzzleFlash = new THREE.Mesh(muzzleFlashGeometry, muzzleFlashMaterial);
+
+                // Position the muzzle flash at the end of the gun barrel.
+                // These values are relative to the gunMesh's origin.
+                muzzleFlash.position.set(0.8, -0.05, -0.6); // Adjust based on your gun model's muzzle
+                muzzleFlash.rotation.x = Math.PI / 2; // Point cone forward
+                muzzleFlash.visible = false; // Initially hidden
+                gunMesh.add(muzzleFlash);
+            }, undefined, function(error) {
+                console.error('An error occurred while loading the gun PNG:', error);
+                const messageBox = document.createElement('div');
+                messageBox.className = 'message-box';
+                messageBox.innerHTML = `<p>Error loading gun image!</p><p>${error.message || 'Unknown error'}</p><button onclick="this.parentNode.remove()">OK</button>`;
+                document.body.appendChild(messageBox);
+            });
+        }
+
+        // Handles the shooting action and triggers recoil animation
+        function shootBullet() {
+            recoil = GUN_RECOIL_AMOUNT; // Start recoil animation
+
+            const bullet = bullets[bulletIdx];
+            bullet.isActive = true;
+            bullet.lifetime = 0;
+            bullet.mesh.visible = true;
+
+            // Show muzzle flash
+            if (muzzleFlash) {
+                muzzleFlash.visible = true;
+                // Hide muzzle flash after a short delay
+                setTimeout(() => {
+                    if (muzzleFlash) muzzleFlash.visible = false;
+                }, 50); // Muzzle flash visible for 50 milliseconds
+            }
+
+
+            // Position the bullet slightly in front of the camera
+            const cameraWorldPos = camera.getWorldPosition(new THREE.Vector3());
+            // Offset bullet spawn by half its length plus a small gap
+            const bulletSpawnOffset = new THREE.Vector3(0, 0, - (BULLET_LENGTH / 2 + 0.1)); 
+            bulletSpawnOffset.applyQuaternion(camera.quaternion); // Apply camera's rotation to offset
+
+            bullet.collider.center.copy(cameraWorldPos).add(bulletSpawnOffset);
+            bullet.mesh.position.copy(bullet.collider.center);
+            
+            // Orient the laser beam to match the camera's direction
+            bullet.mesh.quaternion.copy(camera.quaternion);
+
+            // Set bullet velocity based on camera's forward direction
+            camera.getWorldDirection(bullet.velocity);
+            bullet.velocity.multiplyScalar(BULLET_SPEED);
+
+            bulletIdx = (bulletIdx + 1) % NUM_BULLETS; // Cycle to next bullet in pool
+        }
+
+        // --- PLAYER PHYSICS AND CONTROLS (from provided Octree demo) ---
+
+        function playerCollisions() {
+            const result = worldOctree.capsuleIntersect( playerCollider );
+            playerOnFloor = false;
+
+            if ( result ) {
+                playerOnFloor = result.normal.y > 0;
+                if ( ! playerOnFloor ) {
+                    playerVelocity.addScaledVector( result.normal, - result.normal.dot( playerVelocity ) );
+                }
+                if ( result.depth >= 1e-10 ) {
+                    playerCollider.translate( result.normal.multiplyScalar( result.depth ) );
+                }
+            }
+        }
+
+        function updatePlayer( deltaTime ) {
+            let damping = Math.exp( - 4 * deltaTime ) - 1;
+            if ( ! playerOnFloor ) {
+                playerVelocity.y -= GRAVITY * deltaTime;
+                damping *= 0.1; // small air resistance
+            }
+            playerVelocity.addScaledVector( playerVelocity, damping );
+
+            const deltaPosition = playerVelocity.clone().multiplyScalar( deltaTime );
+            playerCollider.translate( deltaPosition );
+            playerCollisions();
+            camera.position.copy( playerCollider.end );
+        }
+
+        function getForwardVector() {
+            camera.getWorldDirection( playerDirection );
+            playerDirection.y = 0;
+            playerDirection.normalize();
+            return playerDirection;
+        }
+
+        function getSideVector() {
+            camera.getWorldDirection( playerDirection );
+            playerDirection.y = 0;
+            playerDirection.normalize();
+            playerDirection.cross( camera.up );
+            return playerDirection;
+        }
+
+        // Controls input logic (WASD, Jump)
+        function controlsInput( deltaTime ) {
+            const speedDelta = deltaTime * ( playerOnFloor ? 25 : 8 );
+
+            if ( keyStates[ 'KeyW' ] ) {
+                playerVelocity.add( getForwardVector().multiplyScalar( speedDelta ) );
+            }
+            if ( keyStates[ 'KeyS' ] ) {
+                playerVelocity.add( getForwardVector().multiplyScalar( - speedDelta ) );
+            }
+            if ( keyStates[ 'KeyA' ] ) {
+                playerVelocity.add( getSideVector().multiplyScalar( - speedDelta ) );
+            }
+            if ( keyStates[ 'KeyD' ] ) {
+                playerVelocity.add( getSideVector().multiplyScalar( speedDelta ) );
+            }
+            if ( playerOnFloor ) {
+                if ( keyStates[ 'Space' ] ) {
+                    playerVelocity.y = 15;
+                }
+            }
+        }
+
+        // Teleports player if they fall out of bounds
+        function teleportPlayerIfOob() {
+            if ( camera.position.y <= - 25 ) {
+                playerCollider.start.set( 0, 0.35, 0 );
+                playerCollider.end.set( 0, 1, 0 );
+                playerCollider.radius = 0.35;
+                camera.position.copy( playerCollider.end );
+                camera.rotation.set( 0, 0, 0 ); // Reset camera rotation on teleport
+            }
+        }
+
+        // Updates active bullets' positions and checks for collisions
+        function updateBullets( deltaTime ) {
+            for (let i = 0; i < NUM_BULLETS; i++) {
+                const bullet = bullets[i];
+                if (!bullet.isActive) continue;
+
+                bullet.lifetime += deltaTime;
+                if (bullet.lifetime > BULLET_LIFETIME) {
+                    bullet.isActive = false;
+                    bullet.mesh.visible = false;
+                    continue;
+                }
+
+                bullet.collider.center.addScaledVector(bullet.velocity, deltaTime);
+                bullet.mesh.position.copy(bullet.collider.center);
+
+                const result = worldOctree.sphereIntersect(bullet.collider);
+                if (result) {
+                    bullet.isActive = false;
+                    bullet.mesh.visible = false;
+                }
+            }
+        }
+
+        // --- MAIN ANIMATION LOOP ---
+        function animate() {
+            const deltaTime = Math.min( 0.05, clock.getDelta() ) / STEPS_PER_FRAME;
+
+            for ( let i = 0; i < STEPS_PER_FRAME; i ++ ) {
+                controlsInput( deltaTime );
+                updatePlayer( deltaTime );
+                updateBullets( deltaTime );
+                teleportPlayerIfOob();
+            }
+
+            // Animate the 2D viewmodel gun
+            if (gunMesh) {
+                // Bobbing up/down (idle/walking animation) - now fixed at 0 amplitude
+                // The gun's Y position is directly set to GUN_IDLE_Y_OFFSET, keeping it anchored vertically.
+                gunMesh.position.y = GUN_IDLE_Y_OFFSET; 
+                // Swaying left/right (related to bobbing motion) - now fixed at 0 amplitude
+                gunMesh.rotation.z = Math.sin(Date.now() * (bobbingSpeed * 1.5)) * (bobbingAmount * 1.5);
+                
+                // Simulate recoil
+                if (recoil > 0) {
+                    // Only Z-position is affected by recoil, Y remains anchored
+                    gunMesh.position.z = GUN_IDLE_Z_OFFSET - recoil; 
+                    recoil -= GUN_RECOIL_DECAY; // Decrease recoil over time
+                } else {
+                        gunMesh.position.z = GUN_IDLE_Z_OFFSET; // Return to base Z position
+                }
+            }
+
+            renderer.render( scene, camera );
+            stats.update(); // Update FPS stats
+        }
+    </script>
+</body>
+</html>
