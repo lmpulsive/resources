@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-// Assuming CONSTANTS will be imported for values like snowDrawDistance, etc.
-// For now, using local hardcoded values from previous refactor if module doesn't receive them.
+
+// Each particle system class receives the `constants` module via its constructor,
+// allowing access to values like snowDrawDistance, kickUpCount, etc.
 
 class WindParticleSystem {
     constructor(scene, constants) {

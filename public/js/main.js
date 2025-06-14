@@ -163,21 +163,8 @@ try {
         let effectOrigin = new THREE.Vector3(effectData.origin.x, effectData.origin.y, effectData.origin.z);
         let effectDirection = new THREE.Vector3(effectData.direction.x, effectData.direction.y, effectData.direction.z);
 
-        if (effectData.playerId === ownPlayerId && PLAYER_INSTANCE && PLAYER_INSTANCE.characterGroup) {
-            const player = PLAYER_INSTANCE;
-            const gunOffset = new THREE.Vector3(0, 1.5, 0); // Base height for aiming
-            // Apply player's current rotation to this offset if needed, or use camera direction directly from player's view
-            // For simplicity, let's assume the server's origin is good enough, or adjust slightly
-            // The most accurate would be to trace from the player's current gun tip.
-            // The server sends the origin from player's center + gun height.
-            // We can refine the visual origin on the client slightly.
-             if (player.pharaohGun) { // If gun model exists
-                const gunWorldPos = player.pharaohGun.getWorldPosition(new THREE.Vector3());
-                // Could use gunWorldPos, or a point slightly in front of it along aimDirection
-                // For now, server origin is used as a primary reference, client visual can deviate slightly.
-             }
-             // The effectDirection is authoritative from server.
-        }
+        // The complex origin adjustment logic was removed as per instructions.
+        // Server's effectData.origin is used directly.
         createMusketFireEffect(effectOrigin, effectDirection);
     }
   });
@@ -317,8 +304,8 @@ function mainAnimateLoop() {
         GAMELOGIC_INSTANCE.updateShrineInteractions(
             delta, PLAYER_INSTANCE.characterGroup, WORLD_INSTANCE.redCrystalHeart,
             PLAYER_INSTANCE, WORLD_INSTANCE, gameScene,
-            INPUT_MANAGER.getCameraRotationAngle,
-            INPUT_MANAGER.setCameraRotationAngle,
+            INPUT_MANAGER.getCameraRotationAngle.bind(INPUT_MANAGER),
+            INPUT_MANAGER.setCameraRotationAngle.bind(INPUT_MANAGER),
             gunGlowParticlesObject,
             WORLD_INSTANCE.townCenter
         );

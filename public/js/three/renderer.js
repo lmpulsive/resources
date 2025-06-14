@@ -1,9 +1,10 @@
 import * as THREE from 'three';
-// Assuming CONSTANTS module will be imported if specific constants are needed here later.
-// For now, values like cameraOffset, spotlightHeight are hardcoded as they were in the previous version.
+
+// constantsModule is passed to the constructor and stored as this.constants
+// for accessing values like cameraDistance, cameraOffsetY, spotlightHeight.
 
 class Renderer {
-    constructor(container, constantsModule) { // Added constantsModule for future use
+    constructor(container, constantsModule) {
         this.container = container;
         this.constants = constantsModule; // Store if needed for camera settings etc.
 

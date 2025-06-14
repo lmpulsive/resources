@@ -86,12 +86,18 @@ app.get('/', (req, res) => {
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
-  // Player creation and initial event emissions should consider the current game phase.
-  // For example, if a game is in progress, new players might become spectators or wait.
-  // For now, we'll keep the existing logic for player joining.
-  const spawnX = Math.random() * 10 - 5;
+  const spawnX = Math.random() * 10 - 5; // Initial spawn, will be overridden if joining mid-game
   const spawnZ = Math.random() * 10 - 5;
   const newPlayer = new ServerPlayer(socket.id, spawnX, 0, spawnZ);
+
+  if (currentPhase === GamePhases.ROUND_IN_PROGRESS ||
+      currentPhase === GamePhases.ROUND_END ||
+      currentPhase === GamePhases.POST_ROUND_STATS ) {
+      console.log(`Player ${socket.id} joined mid-game (phase: ${currentPhase}). Setting to await next round/respawn.`);
+      newPlayer.isDead = true;
+      newPlayer.health = 0;
+      newPlayer.deathTimestamp = Date.now();
+  }
   players[socket.id] = newPlayer;
 
   socket.emit('initializePlayer', { id: newPlayer.id, initialState: newPlayer });
@@ -122,12 +128,11 @@ io.on('connection', (socket) => {
         io.emit('playerLeft', disconnectedPlayerId);
 
         // Check if game phase should change due to player leaving
-        // Assuming changeGamePhase will be defined in a later step and handles broadcasting
         if ((currentPhase === GamePhases.GAME_COUNTDOWN || currentPhase === GamePhases.ROUND_IN_PROGRESS) &&
             Object.keys(players).length < MIN_PLAYERS_TO_START) {
 
             console.log('Not enough players to continue current game phase. Returning to WAITING_FOR_PLAYERS.');
-            changeGamePhase(GamePhases.WAITING_FOR_PLAYERS); // This function will be added later
+            changeGamePhase(GamePhases.WAITING_FOR_PLAYERS);
         }
     }
   });
@@ -211,6 +216,86 @@ function intersectRayWithSphere(origin, direction, sphereCenter, sphereRadius) {
     return t0;
 }
 
+// Function to change game phase and broadcast
+function changeGamePhase(newPhase) {
+    console.log(`Game phase changing from ${currentPhase} to ${newPhase}`);
+    currentPhase = newPhase;
+    phaseStartTime = Date.now();
+    io.emit('gamePhaseUpdate', {
+        phase: currentPhase,
+        startTime: phaseStartTime,
+        countdownDuration: COUNTDOWN_DURATION_SECONDS,
+        roundDuration: ROUND_DURATION_SECONDS,
+        roundEndMsgDuration: ROUND_END_MESSAGE_DURATION_SECONDS,
+        postRoundStatsDuration: POST_ROUND_STATS_DURATION_SECONDS
+    });
+
+    // Additional logic when a phase starts
+    if (newPhase === GamePhases.ROUND_IN_PROGRESS) {
+        // Reset players for the new round (already handled by countdown -> round_in_progress transition in updateGamePhase)
+    } else if (newPhase === GamePhases.WAITING_FOR_PLAYERS) {
+        // Reset scores or other states if necessary
+    }
+}
+
+// Placeholder for the main game phase update logic
+function updateGamePhase(now) {
+    const elapsedTimeInPhaseSeconds = (now - phaseStartTime) / 1000.0;
+
+    switch (currentPhase) {
+        case GamePhases.WAITING_FOR_PLAYERS:
+            if (Object.keys(players).length >= MIN_PLAYERS_TO_START) {
+                changeGamePhase(GamePhases.GAME_COUNTDOWN);
+            }
+            break;
+        case GamePhases.GAME_COUNTDOWN:
+            if (elapsedTimeInPhaseSeconds >= COUNTDOWN_DURATION_SECONDS) {
+                // Reset players for the new round
+                for (const playerId in players) {
+                    const player = players[playerId];
+                    player.health = 100;
+                    player.isDead = false;
+                    player.deathTimestamp = null;
+                    // Spawn in a random zone
+                    if (SPAWN_ZONES.length > 0) {
+                        const selectedZoneIndex = Math.floor(Math.random() * SPAWN_ZONES.length);
+                        const selectedZone = SPAWN_ZONES[selectedZoneIndex];
+                        const angle = Math.random() * 2 * Math.PI;
+                        const dist = Math.random() * selectedZone.radius;
+                        player.x = selectedZone.x + Math.cos(angle) * dist;
+                        player.z = selectedZone.z + Math.sin(angle) * dist;
+                    } else { // Fallback
+                        player.x = Math.random() * 10 - 5;
+                        player.z = Math.random() * 10 - 5;
+                    }
+                    player.y = 0;
+                    player.rotY = 0; // Reset rotation on round start
+                    player.velocityY = 0;
+                    player.isJumpingServer = false;
+                    player.keys = { w:false, a:false, s:false, d:false, ' ':false };
+                }
+                changeGamePhase(GamePhases.ROUND_IN_PROGRESS);
+            }
+            break;
+        case GamePhases.ROUND_IN_PROGRESS:
+            if (elapsedTimeInPhaseSeconds >= ROUND_DURATION_SECONDS) {
+                changeGamePhase(GamePhases.ROUND_END);
+            }
+            // Additional round logic (e.g., checking win conditions) could go here
+            break;
+        case GamePhases.ROUND_END:
+            if (elapsedTimeInPhaseSeconds >= ROUND_END_MESSAGE_DURATION_SECONDS) {
+                changeGamePhase(GamePhases.POST_ROUND_STATS);
+            }
+            break;
+        case GamePhases.POST_ROUND_STATS:
+            if (elapsedTimeInPhaseSeconds >= POST_ROUND_STATS_DURATION_SECONDS) {
+                changeGamePhase(GamePhases.WAITING_FOR_PLAYERS); // Loop back
+            }
+            break;
+    }
+}
+
 
 const GAME_TICK_RATE = 30;
 const TICK_INTERVAL = 1000 / GAME_TICK_RATE;
@@ -221,9 +306,7 @@ setInterval(() => {
   const delta = (now - lastTickTime) / 1000.0;
   lastTickTime = now;
 
-  // --- Game Phase Update Logic (To be added in Step 3) ---
-  // updateGamePhase(now);
-
+  updateGamePhase(now); // Call the game phase update logic
 
   // Process player inputs and update positions only if round is in progress
   if (currentPhase === GamePhases.ROUND_IN_PROGRESS) {
@@ -278,11 +361,10 @@ setInterval(() => {
                       const dist = Math.random() * selectedZone.radius;
 
                       player.x = selectedZone.x + Math.cos(angle) * dist;
-                      player.y = 0; // Assuming ground level respawn for now
+                      player.y = 0;
                       player.z = selectedZone.z + Math.sin(angle) * dist;
-                      // player.rotY could be randomized or set to a default facing direction
+                      player.rotY = 0; // Reset rotation on respawn
                   } else {
-                      // Fallback if SPAWN_ZONES was empty and safety check failed (should not happen)
                       player.x = Math.random() * 10 - 5;
                       player.y = 0;
                       player.z = Math.random() * 10 - 5;
