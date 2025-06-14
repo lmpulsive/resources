@@ -47,6 +47,21 @@ const POST_ROUND_STATS_DURATION_SECONDS = 10; // How long to show stats
 
 // --- End Game Phase Management ---
 
+const PLAYER_RESPAWN_DELAY_SECONDS = 5; // Example: 5 seconds, can be adjusted
+
+const SPAWN_ZONES = [
+    { x: 0, z: 0, radius: 5 },    // Example: Center zone
+    { x: 50, z: 50, radius: 8 },   // Example: Corner 1
+    { x: -50, z: 50, radius: 8 },  // Example: Corner 2
+    { x: 50, z: -50, radius: 8 },  // Example: Corner 3
+    { x: -50, z: -50, radius: 8 }  // Example: Corner 4
+    // Add more or adjust as needed. Ensure these are within SERVER_MAP_HALF_SIZE boundaries.
+];
+if (SPAWN_ZONES.length === 0) {
+    console.warn("SPAWN_ZONES array is empty! Defaulting to a single spawn zone at (0,0).");
+    SPAWN_ZONES.push({ x: 0, z: 0, radius: 5});
+}
+
 class ServerPlayer {
     constructor(id, x = 0, y = 0, z = 0) {
         this.id = id;
@@ -60,6 +75,8 @@ class ServerPlayer {
 
         this.velocityY = 0;
         this.isJumpingServer = false;
+
+        this.deathTimestamp = null; // Added for new respawn logic
     }
 }
 
@@ -161,11 +178,11 @@ io.on('connection', (socket) => {
             victim.health -= damage;
             console.log(`Player ${hitPlayerId} hit by ${socket.id}, health: ${victim.health}`);
             if (victim.health <= 0) {
-                victim.health = 0;
+                victim.health = 0; // Clamp health at 0
                 victim.isDead = true;
-                console.log(`Player ${hitPlayerId} died.`);
-                // Respawn logic will be handled by phase transitions or specific respawn timers, not immediately here.
-                // For now, they just stay dead for the round.
+                victim.deathTimestamp = Date.now(); // Record time of death
+
+                console.log(`Player ${hitPlayerId} DIED. Timestamp: ${victim.deathTimestamp}`);
             }
         }
 
@@ -244,6 +261,56 @@ setInterval(() => {
       if (player.y < 0 && !player.isJumpingServer) player.y = 0;
     }
   }
+
+  // --- Respawn Logic (should ideally run mainly during ROUND_IN_PROGRESS) ---
+  if (currentPhase === GamePhases.ROUND_IN_PROGRESS) { // Only allow respawns into an active round
+      for (const playerId in players) {
+          const player = players[playerId];
+          if (player.isDead) {
+              const timeSinceDeathSeconds = (Date.now() - player.deathTimestamp) / 1000.0;
+              if (timeSinceDeathSeconds >= PLAYER_RESPAWN_DELAY_SECONDS) {
+                  // Time to respawn
+                  if (SPAWN_ZONES.length > 0) {
+                      const selectedZoneIndex = Math.floor(Math.random() * SPAWN_ZONES.length);
+                      const selectedZone = SPAWN_ZONES[selectedZoneIndex];
+
+                      const angle = Math.random() * 2 * Math.PI;
+                      const dist = Math.random() * selectedZone.radius;
+
+                      player.x = selectedZone.x + Math.cos(angle) * dist;
+                      player.y = 0; // Assuming ground level respawn for now
+                      player.z = selectedZone.z + Math.sin(angle) * dist;
+                      // player.rotY could be randomized or set to a default facing direction
+                  } else {
+                      // Fallback if SPAWN_ZONES was empty and safety check failed (should not happen)
+                      player.x = Math.random() * 10 - 5;
+                      player.y = 0;
+                      player.z = Math.random() * 10 - 5;
+                  }
+
+                  player.health = 100;
+                  player.isDead = false;
+                  player.deathTimestamp = null;
+                  player.velocityY = 0;
+                  player.isJumpingServer = false;
+                  // Reset input keys on respawn
+                  player.keys = { w:false, a:false, s:false, d:false, ' ':false };
+
+                  console.log(`Player ${player.id} respawned at x:${player.x.toFixed(2)}, z:${player.z.toFixed(2)}`);
+
+                  io.emit('playerRespawned', {
+                      id: player.id,
+                      x: player.x,
+                      y: player.y,
+                      z: player.z,
+                      rotY: player.rotY,
+                      health: player.health,
+                      isDead: player.isDead
+                  });
+              }
+          }
+      }
+  } // End of if (currentPhase === GamePhases.ROUND_IN_PROGRESS) for respawn
 
   const gameState = [];
   for (const playerId in players) {
