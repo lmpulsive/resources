@@ -152,10 +152,11 @@ class ShrineParticleEffect {
 export let windSystem, kickUpSystem, gunGlowEffect, redShrineSystem, blueShrineSystem;
 
 export function initAllParticleSystems(scene, constants) {
-    windSystem = new WindParticleSystem(scene, constants);
-    kickUpSystem = new KickUpParticleSystem(scene, constants);
-    gunGlowEffect = new GunGlowEffect(constants);
-    redShrineSystem = new ShrineParticleEffect(scene, 0xff4500, constants);
-    blueShrineSystem = new ShrineParticleEffect(scene, 0x87ceeb, constants);
-    return { gunGlowParticlesObject: gunGlowEffect.getParticlesObject() };
+    // windSystem = new WindParticleSystem(scene, constants); // Comment out or remove
+    // kickUpSystem = new KickUpParticleSystem(scene, constants); // Comment out or remove
+    // gunGlowEffect = new GunGlowEffect(constants); // Comment out or remove
+    // redShrineSystem = new ShrineParticleEffect(scene, 0xff4500, constants); // Comment out or remove
+    // blueShrineSystem = new ShrineParticleEffect(scene, 0x87ceeb, constants); // Comment out or remove
+    // return { gunGlowParticlesObject: gunGlowEffect.getParticlesObject() }; // Remove this part
+    return {}; // Or return other systems if any are still managed here (none are now)
 }
