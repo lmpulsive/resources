@@ -602,6 +602,12 @@
     </div>
 
     <script>
+        // --- Constants for Player Stats and Cooldowns ---
+        const INITIAL_PLAYER_HEALTH = 100;
+        const INITIAL_PLAYER_MANA = 100;
+        const INITIAL_PLAYER_XP_NEXT = 100;
+        const PLAYER_ATTACK_COOLDOWN_FRAMES = 30;
+
         // Global game state object to manage all game entities and variables
         const game = {
             scene: null, // Three.js scene
@@ -609,13 +615,13 @@
             renderer: null, // Three.js renderer
             player: {
                 mesh: null, // Player's THREE.Sprite
-                health: 100, // Current health
-                maxHealth: 100, // Maximum health
-                mana: 100, // Current mana
-                maxMana: 100, // Maximum mana
+                health: INITIAL_PLAYER_HEALTH, // Current health
+                maxHealth: INITIAL_PLAYER_HEALTH, // Maximum health
+                mana: INITIAL_PLAYER_MANA, // Current mana
+                maxMana: INITIAL_PLAYER_MANA, // Maximum mana
                 level: 1, // Player level
                 xp: 0, // Current experience points
-                xpNext: 100, // XP needed for next level
+                xpNext: INITIAL_PLAYER_XP_NEXT, // XP needed for next level
                 // Player's 3D position (center of the player model, Y will be set by createPlayer)
                 position: new THREE.Vector3(0, 0, 0), 
                 attackCooldown: 0, // Cooldown frames for basic attack
@@ -797,7 +803,7 @@
         function createPlayer() {
             // Desired visual height of the player sprite in 3D world units
             const desiredPlayerHeight = 2.5; 
-            const SPRITE_SHEET_URL = 'https://raw.githubusercontent.com/lmpulsive/resources/main/87E1594E-0C41-4A4C-A61D-5CD0BA591AD6.png';
+            const SPRITE_SHEET_URL = 'sprites/player_spritesheet.png';
 
             const textureLoader = new THREE.TextureLoader();
             textureLoader.load(
@@ -1051,7 +1057,7 @@
             }, 100);
             
             showDamageText(damage, enemy.position); // Display floating damage text
-            game.player.attackCooldown = 30; // Set cooldown frames
+            game.player.attackCooldown = PLAYER_ATTACK_COOLDOWN_FRAMES; // Set cooldown frames
 
             // Trigger attack animation
             game.player.animationState = 'attack';
@@ -1929,11 +1935,11 @@
 
         function restartGame() {
             // Reset player stats
-            game.player.health = game.player.maxHealth = 100;
-            game.player.mana = game.player.maxMana = 100;
+            game.player.health = game.player.maxHealth = INITIAL_PLAYER_HEALTH;
+            game.player.mana = game.player.maxMana = INITIAL_PLAYER_MANA;
             game.player.level = 1;
             game.player.xp = 0;
-            game.player.xpNext = 100;
+            game.player.xpNext = INITIAL_PLAYER_XP_NEXT;
             game.player.attackCooldown = 0;
 
             // Reset player's position and appearance
@@ -2387,6 +2393,13 @@
                 initMobileControls(); // Setup virtual joystick and mobile action buttons
                 initEventListeners(); // Setup all keyboard, mouse, touch, and resize listeners
                 updateUI(); // Initial UI update
+
+                // Background music
+                // Browsers may prevent autoplay until user interacts with the page.
+                const bgMusic = new Audio('audio/song1.mp3');
+                bgMusic.loop = true;
+                bgMusic.play().catch(error => console.log("Autoplay prevented: ", error));
+                game.backgroundMusic = bgMusic;
                 
                 console.log('Diablo 3 Clone Game initialized successfully!');
                 animate(); // Start the main game loop
