@@ -647,17 +647,17 @@
                 spriteTexture: null // To store the loaded sprite sheet texture
             },
             enemies: [], // Array to hold all enemy objects
-            spells: {
+            spells: { // Keep 'active' and 'cooldowns' here
                 active: [], // Array for active spell projectiles/effects
-                types: { // Definitions for various spells
-                    fireball: { damage: 40, manaCost: 15, cooldown: 1000, range: 20, targeted: true },
-                    icestorm: { damage: 30, manaCost: 25, cooldown: 3000, range: 8, targeted: true },
-                    lightning: { damage: 50, manaCost: 20, cooldown: 1500, range: 15, targeted: true },
-                    teleport: { manaCost: 30, cooldown: 5000, range: 10, targeted: true },
-                    shield: { duration: 10000, manaCost: 20, cooldown: 15000, targeted: false }, // Example of non-targeted spell
-                    meteor: { damage: 80, manaCost: 40, cooldown: 8000, range: 12, targeted: true }
-                },
                 cooldowns: {} // Stores cooldown timestamps for spells
+            },
+            spellDefinitions: { // New top-level object for definitions
+                fireball: { damage: 40, manaCost: 15, cooldown: 1000, range: 20, targeted: true },
+                icestorm: { damage: 30, manaCost: 25, cooldown: 3000, range: 8, targeted: true },
+                lightning: { damage: 50, manaCost: 20, cooldown: 1500, range: 15, targeted: true },
+                teleport: { manaCost: 30, cooldown: 5000, range: 10, targeted: true },
+                shield: { duration: 10000, manaCost: 20, cooldown: 15000, targeted: false }, // Example of non-targeted spell
+                meteor: { damage: 80, manaCost: 40, cooldown: 8000, range: 12, targeted: true }
             },
             effects: [], // Array for various temporary visual effects (explosions, etc.)
             keys: {}, // Stores state of pressed keyboard keys
@@ -857,45 +857,83 @@
 
         // --- Enemy Creation ---
         function createEnemy() {
-            const enemyGroup = new THREE.Group();
-            
-            // Enemy body
-            const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.4, 1.5, 6);
-            const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0xff3333 }); // Red body
-            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-            body.castShadow = true;
-            enemyGroup.add(body);
-            
-            // Enemy head
-            const headGeometry = new THREE.SphereGeometry(0.25, 6, 6);
-            const headMaterial = new THREE.MeshLambertMaterial({ color: 0xff1111 }); // Darker red head
-            const head = new THREE.Mesh(headGeometry, headMaterial);
-            head.position.y = 1;
-            enemyGroup.add(head);
-            
-            // Position enemy randomly around player
-            const angle = Math.random() * Math.PI * 2;
-            const distance = 8 + Math.random() * 15; // Random distance from player
-            enemyGroup.position.set(
-                Math.cos(angle) * distance,
-                0.75, // Vertically offset for ground alignment (center of 1.5 unit tall enemy)
-                Math.sin(angle) * distance
-            );
-            
-            // Store enemy specific data in userData property
-            enemyGroup.userData = {
-                health: 30,
-                maxHealth: 30,
-                speed: 0.02,
-                attackDamage: 5,
-                xpValue: 25,
-                lastAttack: 0, // Timestamp of last attack
-                body: body, // Reference to body mesh for color changes
-                head: head // Reference to head mesh
-            };
-            
-            game.enemies.push(enemyGroup); // Add enemy to the game's enemy list
-            game.scene.add(enemyGroup); // Add enemy to the scene
+            if (Math.random() < 0.5) {
+                // Create NEW sprite-based enemy
+                const enemyTexture = new THREE.TextureLoader().load('sprites/playeridle1.png');
+                enemyTexture.magFilter = THREE.NearestFilter; // For pixel art
+                enemyTexture.minFilter = THREE.NearestFilter;
+                const enemyMaterial = new THREE.SpriteMaterial({ map: enemyTexture, transparent: true, alphaTest: 0.1 });
+                const enemySprite = new THREE.Sprite(enemyMaterial);
+
+                const enemyHeight = 2.0; // Adjust as needed
+                enemySprite.scale.set(enemyHeight, enemyHeight, 1); // Assuming aspect ratio 1:1 for the sprite frame
+
+                // Position enemy randomly around player (similar to original enemy)
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 8 + Math.random() * 15;
+                enemySprite.position.set(
+                    Math.cos(angle) * distance,
+                    enemyHeight / 2, // Center sprite vertically, base on ground
+                    Math.sin(angle) * distance
+                );
+
+                enemySprite.userData = {
+                    type: 'sprite_enemy', // Distinguish from default
+                    health: 20,
+                    maxHealth: 20,
+                    speed: 0.03,
+                    attackDamage: 7,
+                    xpValue: 30,
+                    lastAttack: 0,
+                    // Storing material for damage flash
+                    material: enemyMaterial // Store material for flashing
+                };
+
+                game.enemies.push(enemySprite);
+                game.scene.add(enemySprite);
+                return; // Return early after creating the new enemy type
+            } else {
+                // Create ORIGINAL cylinder-based enemy (existing code)
+                const enemyGroup = new THREE.Group();
+
+                // Enemy body
+                const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.4, 1.5, 6);
+                const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0xff3333 }); // Red body
+                const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+                body.castShadow = true;
+                enemyGroup.add(body);
+
+                // Enemy head
+                const headGeometry = new THREE.SphereGeometry(0.25, 6, 6);
+                const headMaterial = new THREE.MeshLambertMaterial({ color: 0xff1111 }); // Darker red head
+                const head = new THREE.Mesh(headGeometry, headMaterial);
+                head.position.y = 1;
+                enemyGroup.add(head);
+
+                // Position enemy randomly around player
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 8 + Math.random() * 15; // Random distance from player
+                enemyGroup.position.set(
+                    Math.cos(angle) * distance,
+                    0.75, // Vertically offset for ground alignment (center of 1.5 unit tall enemy)
+                    Math.sin(angle) * distance
+                );
+
+                // Store enemy specific data in userData property
+                enemyGroup.userData = {
+                    health: 30,
+                    maxHealth: 30,
+                    speed: 0.02,
+                    attackDamage: 5,
+                    xpValue: 25,
+                    lastAttack: 0, // Timestamp of last attack
+                    body: body, // Reference to body mesh for color changes
+                    head: head // Reference to head mesh
+                };
+
+                game.enemies.push(enemyGroup); // Add enemy to the game's enemy list
+                game.scene.add(enemyGroup); // Add enemy to the scene
+            }
         }
 
         // --- Input Handling ---
@@ -1045,16 +1083,34 @@
             
             const damage = 15 + Math.floor(Math.random() * 10); // Randomize damage
             enemy.userData.health -= damage; // Apply damage to enemy
+
+            // Play attack sound effect
+            if (game.sfx && game.sfx.playerAttack) {
+                game.sfx.playerAttack.currentTime = 0; // Allow sound to replay if already playing
+                game.sfx.playerAttack.play().catch(error => console.log("Attack SFX error: ", error));
+            }
             
             // Visual feedback: brief white flash on enemy
-            enemy.userData.body.material.color.setHex(0xffffff);
-            enemy.userData.head.material.color.setHex(0xffffff);
-            setTimeout(() => {
-                if (enemy.userData.health > 0) { // Only revert color if not dead
-                    enemy.userData.body.material.color.setHex(0xff3333);
-                    enemy.userData.head.material.color.setHex(0xff1111);
-                }
-            }, 100);
+            if (enemy.userData.type === 'sprite_enemy') {
+                const originalColorHex = enemy.userData.material.color.getHex(); // Store original color
+                enemy.userData.material.color.setHex(0xffffff); // Flash white
+                setTimeout(() => {
+                    // Check if enemy and its material still exist (might be destroyed if health <= 0)
+                    if (enemy.userData.health > 0 && enemy.userData.material) {
+                       enemy.userData.material.color.setHex(originalColorHex); // Revert to original
+                    }
+                }, 100);
+            } else {
+                // Existing flash logic for cylinder enemy
+                enemy.userData.body.material.color.setHex(0xffffff);
+                enemy.userData.head.material.color.setHex(0xffffff);
+                setTimeout(() => {
+                    if (enemy.userData.health > 0) {
+                        enemy.userData.body.material.color.setHex(0xff3333);
+                        enemy.userData.head.material.color.setHex(0xff1111);
+                    }
+                }, 100);
+            }
             
             showDamageText(damage, enemy.position); // Display floating damage text
             game.player.attackCooldown = PLAYER_ATTACK_COOLDOWN_FRAMES; // Set cooldown frames
@@ -1068,7 +1124,7 @@
 
         // --- Spell System ---
         function castSpell(spellType, targetPosition = null) {
-            const spell = game.spells.types[spellType];
+            const spell = game.spellDefinitions[spellType];
             if (!spell) return false; // Spell type not found
             
             // Check cooldown
@@ -1149,46 +1205,36 @@
 
         function castFireball(targetPosition) {
             if (!targetPosition) return; // A target position is required for fireball
+
+            // Load fireball sprite texture
+            const fireballTexture = new THREE.TextureLoader().load('sprites/fireball.png');
             
-            // Create fireball projectile with a trail/glow effect
-            const fireballGeometry = new THREE.SphereGeometry(0.4, 12, 12);
-            const fireballMaterial = new THREE.MeshBasicMaterial({ 
-                color: 0xff4400, // Fiery orange
-                transparent: true,
-                opacity: 0.9
-            });
-            const fireball = new THREE.Mesh(fireballGeometry, fireballMaterial);
+            // Create sprite material and sprite
+            const fireballMaterial = new THREE.SpriteMaterial({ map: fireballTexture, transparent: true, alphaTest: 0.1 });
+            const fireballSprite = new THREE.Sprite(fireballMaterial);
             
-            // Add a larger, semi-transparent sphere for glowing effect
-            const glowGeometry = new THREE.SphereGeometry(0.6, 8, 8);
-            const glowMaterial = new THREE.MeshBasicMaterial({ 
-                color: 0xff8800, // Lighter orange for glow
-                transparent: true,
-                opacity: 0.3
-            });
-            const glow = new THREE.Mesh(glowGeometry, glowMaterial);
-            fireball.add(glow); // Add glow as a child of fireball
-            
-            fireball.position.copy(game.player.position); // Start at player's position
-            fireball.position.y += 0.5; // Lift slightly above player's center for visual origin
-            
+            // Adjust sprite properties (scale and initial position)
+            fireballSprite.scale.set(1, 1, 1); // Adjust size as needed
+            fireballSprite.position.copy(game.player.position); // Start at player's position
+            fireballSprite.position.y += 0.5; // Lift slightly above player's center
+
             // Calculate direction vector towards target
-            const direction = targetPosition.clone().sub(fireball.position).normalize();
+            const direction = targetPosition.clone().sub(fireballSprite.position).normalize();
             
             // Define the effect properties
             const effect = {
                 type: 'projectile',
-                mesh: fireball,
+                mesh: fireballSprite,
                 direction: direction,
                 speed: 0.6,
-                damage: game.spells.types.fireball.damage,
+                damage: game.spellDefinitions.fireball.damage,
                 lifetime: 0,
                 maxLifetime: 120, // Max frames before despawn
                 rotationSpeed: 0.2 // For visual rotation
             };
             
             game.effects.push(effect); // Add to active effects
-            game.scene.add(fireball); // Add fireball to scene
+            game.scene.add(fireballSprite); // Add fireball sprite to scene
         }
 
         function castIceStorm(targetPosition) {
@@ -1230,7 +1276,7 @@
                         mesh: ice,
                         targetY: 0.5, // Target Y position for impact
                         fallSpeed: 0.1,
-                        damage: game.spells.types.icestorm.damage,
+                        damage: game.spellDefinitions.icestorm.damage,
                         lifetime: 0,
                         maxLifetime: 150,
                         hasHit: new Set(), // Keep track of enemies already hit by this shard
@@ -1257,7 +1303,7 @@
                     // Ensure enemy hasn't already been targeted in this chain
                     if (!targets.includes(enemy)) {
                         const dist = currentPos.distanceTo(enemy.position);
-                        if (dist < nearestDist && dist <= game.spells.types.lightning.range) {
+                        if (dist < nearestDist && dist <= game.spellDefinitions.lightning.range) {
                             nearestDist = dist;
                             nearestEnemy = enemy;
                         }
@@ -1277,7 +1323,7 @@
             targets.forEach((target, index) => {
                 setTimeout(() => { // Stagger the lightning strikes
                     // Deal damage, reduced for subsequent targets
-                    const damage = game.spells.types.lightning.damage * (1 - index * 0.2); 
+                    const damage = game.spellDefinitions.lightning.damage * (1 - index * 0.2);
                     target.userData.health -= damage;
                     showDamageText(Math.floor(damage), target.position);
                     
@@ -1331,7 +1377,7 @@
             
             const distance = game.player.position.distanceTo(targetPosition);
             // Only teleport if within range
-            if (distance <= game.spells.types.teleport.range) {
+            if (distance <= game.spellDefinitions.teleport.range) {
                 // Create departure portal effect
                 const portalGeometry = new THREE.RingGeometry(0.5, 1.5, 16); // Ring shape
                 const portalMaterial = new THREE.MeshBasicMaterial({ 
@@ -1406,7 +1452,7 @@
                 type: 'shield',
                 meshes: shieldLayers,
                 lifetime: 0,
-                maxLifetime: game.spells.types.shield.duration / (1000 / 60), // Convert ms duration to frames
+                maxLifetime: game.spellDefinitions.shield.duration / (1000 / 60), // Convert ms duration to frames
                 rotationSpeeds: [0.02, -0.03, 0.04], // Different rotation speeds for each layer
                 pulseSpeed: 0.05 // For pulsing effect
             };
@@ -1485,7 +1531,7 @@
                     mesh: meteor,
                     targetY: 0, // Ground level
                     speed: 1.2, // Fall speed
-                    damage: game.spells.types.meteor.damage,
+                    damage: game.spellDefinitions.meteor.damage,
                     hasExploded: false, // Flag to prevent multiple explosions
                     rotationSpeed: 0.3 // For meteor spin
                 };
@@ -1728,7 +1774,7 @@
                     }
                     
                     // Check mana requirements
-                    if (game.player.mana < game.spells.types[spellType].manaCost) {
+                    if (game.player.mana < game.spellDefinitions[spellType].manaCost) {
                         actionSlot.classList.add('insufficient-mana');
                     } else {
                         actionSlot.classList.remove('insufficient-mana');
@@ -2400,6 +2446,11 @@
                 bgMusic.loop = true;
                 bgMusic.play().catch(error => console.log("Autoplay prevented: ", error));
                 game.backgroundMusic = bgMusic;
+
+                // Initialize Sound Effects
+                game.sfx = game.sfx || {}; // Ensure game.sfx object exists
+                game.sfx.playerAttack = new Audio('audio/song2.mp3');
+                // Optional: game.sfx.playerAttack.volume = 0.5; // Adjust volume if needed
                 
                 console.log('Diablo 3 Clone Game initialized successfully!');
                 animate(); // Start the main game loop
